@@ -1,11 +1,12 @@
 import logging
 from types import ModuleType
-from typing import TYPE_CHECKING, List, Optional, Tuple
+from typing import TYPE_CHECKING, List, Optional, Tuple, Union
 
 import ray
 from ray.exceptions import RayChannelError
 from ray.experimental.channel.gpu_communicator import (
     GPUCommunicator,
+    GPUFuture,
     TorchTensorAllocator,
 )
 
@@ -18,6 +19,28 @@ if TYPE_CHECKING:
 # into the program using Ray. Ray provides a default configuration at
 # entry/init points.
 logger = logging.getLogger(__name__)
+
+
+class _GPUFuture(GPUFuture["torch.Tensor"]):
+    def __init__(self, buf: "torch.Tensor", event: Optional["cp.cuda.Event"]):
+        self._buf = buf
+        self._event = event
+
+    def wait(
+        self,
+        waiter_stream: Optional[
+            Union["cp.cuda.Stream", "cp.cuda.ExternalStream"]
+        ] = None,
+    ) -> "torch.Tensor":
+        import cupy as cp
+
+        if self._event:
+            if waiter_stream:
+                waiter_stream.wait_event(self._event)
+            else:
+                current_stream = cp.cuda.get_current_stream()
+                current_stream.wait_event(self._event)
+        return self._value
 
 
 class _NcclGroup(GPUCommunicator):
@@ -35,6 +58,7 @@ class _NcclGroup(GPUCommunicator):
         rank: Optional[int],
         actor_handles: List["ray.actor.ActorHandle"],
         cuda_stream: Optional[int],
+        use_communication_streams: bool = False,
     ):
         """
         Initialize a NCCL communicator that can be used to communicate p2p with
@@ -66,11 +90,17 @@ class _NcclGroup(GPUCommunicator):
             actor_handles: A list of actor handles, in rank order.
             cuda_stream: A raw CUDA stream to dispatch NCCL ops to. If rank is
                 specified, then this must be specified too.
+            use_communication_streams: Whether to use one dedicated streams for
+                communication. This is useful for overlapping communication
+                with computation.
+                If this is True, then `cuda_stream` is not used and new streams
+                are created.
         """
         self._world_size = world_size
         self._rank: Optional[int] = rank
         self.nccl_util: Optional[ModuleType] = None
         self._actor_handles = actor_handles
+        self._use_communication_streams = use_communication_streams
 
         if rank is not None:
             assert ray.get_gpu_ids(), "NCCL actor has no GPUs assigned"
@@ -102,6 +132,20 @@ class _NcclGroup(GPUCommunicator):
             self._cuda_stream = cp.cuda.ExternalStream(
                 cuda_stream, device_id=device.index
             )
+
+            if use_communication_streams:
+                import torch
+
+                self._send_stream = cp.cuda.ExternalStream(
+                    torch.cuda.Stream().cuda_stream, device_id=device.index
+                )
+                self._recv_stream = cp.cuda.ExternalStream(
+                    torch.cuda.Stream().cuda_stream, device_id=device.index
+                )
+                event = cp.cuda.Event()
+                event.record(cp.cuda.get_current_stream())
+                self._send_stream.wait_event(event)
+                self._recv_stream.wait_event(event)
 
         self._closed = False
 
@@ -138,7 +182,9 @@ class _NcclGroup(GPUCommunicator):
         """
         return self._world_size
 
-    def send(self, value: "torch.Tensor", peer_rank: int) -> None:
+    def send(
+        self, value: Union["torch.Tensor", GPUFuture["torch.Tensor"]], peer_rank: int
+    ) -> None:
         """
         Send a torch.Tensor to a peer.
 
@@ -156,6 +202,17 @@ class _NcclGroup(GPUCommunicator):
         """
         if self._closed:
             raise RayChannelError("NCCL group has been destroyed.")
+
+        if isinstance(value, GPUFuture):
+            self._send_stream.synchronize()
+            value = value.wait(self._send_stream)
+        # if self._use_communication_streams:
+        #     import cupy as cp
+
+        #     if event is not None:
+        #         assert isinstance(event, cp.cuda.Event)
+        #     self._send_stream.synchronize()
+        #     self._send_stream.wait_event(event)
         # TODO(swang): Handle send/recv async NCCL errors such as network
         # failures.
         self._comm.send(
@@ -163,7 +220,9 @@ class _NcclGroup(GPUCommunicator):
             value.numel(),
             self.nccl_util.get_nccl_tensor_dtype(value),
             peer_rank,
-            self._cuda_stream.ptr,
+            self._send_stream.ptr
+            if self._use_communication_streams
+            else self._cuda_stream.ptr,
         )
 
     def recv(
@@ -172,7 +231,7 @@ class _NcclGroup(GPUCommunicator):
         dtype: "torch.dtype",
         peer_rank: int,
         allocator=Optional[TorchTensorAllocator],
-    ) -> "torch.Tensor":
+    ) -> GPUFuture["torch.Tensor"]:
         """
         Receive a torch.Tensor from a peer and synchronize the current stream.
 
@@ -188,22 +247,40 @@ class _NcclGroup(GPUCommunicator):
             raise RayChannelError("NCCL group has been destroyed.")
         assert allocator is not None, "NCCL group requires a tensor allocator"
         buf = allocator(shape, dtype)
-        self._comm.recv(
-            self.nccl_util.get_tensor_ptr(buf),
-            buf.numel(),
-            self.nccl_util.get_nccl_tensor_dtype(buf),
-            peer_rank,
-            self._cuda_stream.ptr,
-        )
 
-        # Buffer values are undefined if NCCL ops are aborted. Therefore, we
-        # need to synchronize here and check that the channel is still open to
-        # ensure that the receive buffer is valid.
-        # TODO(swang): Avoid CUDA synchronization.
-        self._cuda_stream.synchronize()
-        if self._closed:
-            raise RayChannelError("NCCL group has been destroyed.")
-        return buf
+        if self._use_communication_streams:
+            import cupy as cp
+
+            self._recv_stream.synchronize()
+            event = cp.cuda.Event()
+            self._comm.recv(
+                self.nccl_util.get_tensor_ptr(buf),
+                buf.numel(),
+                self.nccl_util.get_nccl_tensor_dtype(buf),
+                peer_rank,
+                self._recv_stream.ptr,
+            )
+            event.record(self._recv_stream)
+            if self._closed:
+                raise RayChannelError("NCCL group has been destroyed.")
+            return _GPUFuture(buf, event)
+        else:
+            self._comm.recv(
+                self.nccl_util.get_tensor_ptr(buf),
+                buf.numel(),
+                self.nccl_util.get_nccl_tensor_dtype(buf),
+                peer_rank,
+                self._cuda_stream.ptr,
+            )
+
+            # Buffer values are undefined if NCCL ops are aborted. Therefore, we
+            # need to synchronize here and check that the channel is still open to
+            # ensure that the receive buffer is valid.
+            # TODO(swang): Avoid CUDA synchronization.
+            self._cuda_stream.synchronize()
+            if self._closed:
+                raise RayChannelError("NCCL group has been destroyed.")
+            return _GPUFuture(buf, None)
 
     def destroy(self) -> None:
         """

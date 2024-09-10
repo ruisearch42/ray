@@ -10,6 +10,7 @@ from ray.experimental.channel import ChannelContext
 from ray.experimental.channel.common import ChannelInterface
 from ray.experimental.channel.gpu_communicator import (
     GPUCommunicator,
+    GPUFuture,
     TorchTensorAllocator,
 )
 from ray.experimental.channel.nccl_group import _NcclGroup
@@ -311,6 +312,12 @@ class TorchTensorNcclChannel(ChannelInterface):
     def _get_tensor_meta(self, tensor: "torch.Tensor") -> Optional["TorchTensorType"]:
         from ray.experimental.channel.torch_tensor_type import TorchTensorType
 
+        if isinstance(tensor, GPUFuture):
+            assert (
+                self.has_static_type()
+            ), "Overlapping GPU communication requires static tensor type."
+            return None
+
         if not isinstance(tensor, self.torch.Tensor):
             raise ValueError("Task must return torch.Tensors")
 
@@ -383,7 +390,7 @@ class TorchTensorNcclChannel(ChannelInterface):
 
     def read(
         self, timeout: Optional[float] = None
-    ) -> Union["torch.Tensor", List["torch.Tensor"]]:
+    ) -> Union[GPUFuture["torch.Tensor"], List[GPUFuture["torch.Tensor"]]]:
         if self._meta_channel is not None:
             meta = self._meta_channel.read()
         else:
@@ -397,18 +404,16 @@ class TorchTensorNcclChannel(ChannelInterface):
                 self._torch_tensor_allocator,
             )
 
-        bufs: List["torch.Tensor"] = []
+        futures: List[GPUFuture["torch.Tensor"]] = []
         for typ in meta:
-            buf = self._nccl_group.recv(
+            future = self._nccl_group.recv(
                 typ._shape,
                 typ._dtype,
                 self._writer_rank,
                 self._torch_tensor_allocator,
             )
-            bufs.append(buf)
-        # TODO: Sync CUDA stream after receiving all tensors, instead of after
-        # each tensor.
-        return bufs
+            futures.append(future)
+        return futures
 
     def close(self) -> None:
         if self._meta_channel is not None:
@@ -435,6 +440,7 @@ def _do_init_nccl_group(
     comm_id,
     rank,
     actor_handles,
+    use_communication_streams,
     custom_nccl_group: Optional[GPUCommunicator] = None,
 ):
     import torch
@@ -454,6 +460,7 @@ def _do_init_nccl_group(
             rank,
             actor_handles,
             torch.cuda.current_stream().cuda_stream,
+            use_communication_streams,
         )
 
 
@@ -512,6 +519,7 @@ def _get_ranks(
 def _init_nccl_group(
     actors: List[ray.actor.ActorHandle],
     custom_nccl_group: Optional[GPUCommunicator] = None,
+    use_communication_streams: bool = False,
 ) -> str:
     """
     Initialize a NCCL group with the given actors. If a custom NCCL group is
@@ -560,6 +568,7 @@ def _init_nccl_group(
             nccl_comm_id,
             rank,
             actors,
+            use_communication_streams,
             custom_nccl_group,
         )
         for rank, actor in zip(ranks, actors)
