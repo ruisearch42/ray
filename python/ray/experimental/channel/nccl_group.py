@@ -40,7 +40,7 @@ class _GPUFuture(GPUFuture["torch.Tensor"]):
             else:
                 current_stream = cp.cuda.get_current_stream()
                 current_stream.wait_event(self._event)
-        return self._value
+        return self._buf
 
 
 class _NcclGroup(GPUCommunicator):

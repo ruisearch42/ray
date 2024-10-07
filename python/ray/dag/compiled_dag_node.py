@@ -117,7 +117,7 @@ def do_exec_tasks(
                 break
             for operation in schedule:
                 done = tasks[operation.exec_task_idx].exec_operation(
-                    self, operation.type, overlap_gpu_communication
+                    self, operation, overlap_gpu_communication
                 )
                 if done:
                     break
@@ -413,7 +413,6 @@ class ExecutableTask:
         Returns:
             True if system error occurs and exit the loop; otherwise, False.
         """
-        assert self._intermediate_buffer is None
         exit = False
         try:
             input_data = self.input_reader.read()
@@ -1539,7 +1538,7 @@ class CompiledDAG:
                 exec_task_func,
                 executable_tasks,
                 self.actor_to_execution_schedule[actor_handle],
-                self.overlap_gpu_communication,
+                self._overlap_gpu_communication,
             )
 
         assert self.output_task_idx is not None
