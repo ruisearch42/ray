@@ -28,7 +28,7 @@ T = TypeVar("T")
 @DeveloperAPI
 class GPUFuture(ABC, Generic[T]):
     """
-    Future for a GPU communication.
+    Future for a GPU operation.
     """
 
     @abstractmethod

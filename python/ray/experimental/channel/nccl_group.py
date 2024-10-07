@@ -23,6 +23,14 @@ logger = logging.getLogger(__name__)
 
 class _GPUFuture(GPUFuture["torch.Tensor"]):
     def __init__(self, buf: "torch.Tensor", event: Optional["cp.cuda.Event"]):
+        """
+        Initialize a GPU future.
+
+        Args:
+            buf: The buffer to return when the future is resolved.
+            event: The CUDA event to wait on before returning the buffer.
+                If None, the buffer is immediately returned.
+        """
         self._buf = buf
         self._event = event
 
@@ -32,6 +40,13 @@ class _GPUFuture(GPUFuture["torch.Tensor"]):
             Union["cp.cuda.Stream", "cp.cuda.ExternalStream"]
         ] = None,
     ) -> "torch.Tensor":
+        """
+        Wait for the future to resolve and return the buffer.
+
+        Args:
+            waiter_stream: The stream to wait on before returning the buffer.
+                If None, the current stream is used.
+        """
         import cupy as cp
 
         if self._event:
@@ -204,13 +219,6 @@ class _NcclGroup(GPUCommunicator):
         if isinstance(value, GPUFuture):
             self._send_stream.synchronize()
             value = value.wait(self._send_stream)
-        # if self._use_communication_streams:
-        #     import cupy as cp
-
-        #     if event is not None:
-        #         assert isinstance(event, cp.cuda.Event)
-        #     self._send_stream.synchronize()
-        #     self._send_stream.wait_event(event)
         # TODO(swang): Handle send/recv async NCCL errors such as network
         # failures.
         self._comm.send(

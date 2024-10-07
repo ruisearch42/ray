@@ -357,17 +357,12 @@ class ExecutableTask:
             self.output_channels, self.output_idxs
         )
         # Store the intermediate result of a READ or COMPUTE operation.
-        # The result of a READ operation will be used by a COMPUTE operation,
-        # and the result of a COMPUTE operation will be used by a WRITE operation.
-        self._intermediate_buffer: Dict[_DAGNodeOperation, Any] = {}
-
-        # Store the intermediate result for streamed execution.
-        # The key is the operation, and the value is the input to this operation,
-        # i.e., the result from the last operation. There are only two cases:
+        # The dict is from the operation to its input, i.e., the intermediate
+        # result from the last operation. There are only two cases:
         # if the operation is COMPUTE, the value is the result from the READ with
         # the same exec_task_idx; if the operation is WRITE, the value is the result
         # from the COMPUTE with the same exec_task_idx.
-        self._stream_buffer: Dict[_DAGNodeOperation, Any] = {}
+        self._intermediate_buffer: Dict[_DAGNodeOperation, Any] = {}
 
     def cancel(self):
         """
@@ -391,9 +386,10 @@ class ExecutableTask:
 
     def set_intermediate_buffer(self, operation: _DAGNodeOperation, data: Any):
         """
-        Store the intermediate result of a READ or COMPUTE operation.
+        Store the intermediate result for a READ or COMPUTE operation.
 
         Args:
+            operation: The operation that produced the intermediate result.
             data: The intermediate result of a READ or COMPUTE operation.
         """
         self._intermediate_buffer[operation.next_operation()] = data
@@ -403,8 +399,12 @@ class ExecutableTask:
         Retrieve the intermediate result of a READ or COMPUTE operation,
         and reset the intermediate buffer to None.
 
+        Args:
+            operation: The operation for which we want to retrieve and reset
+                the intermediate result.
+
         Returns:
-            The intermediate result of a READ or COMPUTE operation.
+            The intermediate result for the operation.
         """
         return self._intermediate_buffer.pop(operation)
 
@@ -412,6 +412,8 @@ class ExecutableTask:
         """
         Read input data from upstream DAG nodes and cache the intermediate result.
 
+        Args:
+            operation: The read operation corresponding to this read.
         Returns:
             True if system error occurs and exit the loop; otherwise, False.
         """
@@ -432,11 +434,12 @@ class ExecutableTask:
     ) -> bool:
         """
         Retrieve the intermediate result from the READ operation and perform the
-        computation. Then, cache the new intermediate result. The caller must ensure
-        that the last operation executed is READ so that the function retrieves the
-        correct intermediate result.
+        computation. Then, cache the new intermediate result.
 
         Args:
+            operation: The compute operation corresponding to this compute.
+            overlap_gpu_communication: Whether to overlap GPU communication with
+                computation during DAG execution to improve performance.
             class_handle: An instance of the class to which the actor belongs. For
                 example, the type of `class_handle` is <class 'xxxx.Worker'> if the
                 actor belongs to the `class Worker` class.
@@ -489,6 +492,9 @@ class ExecutableTask:
         downstream DAG nodes. The caller must ensure that the last operation executed
         is COMPUTE so that the function retrieves the correct intermediate result.
 
+        Args:
+            operation: The write operation corresponding to this write.
+
         Returns:
             True if system error occurs and exit the loop; otherwise, False.
         """
@@ -515,8 +521,9 @@ class ExecutableTask:
 
         Args:
             class_handle: The handle of the class to which the actor belongs.
-            op_type: The type of the operation. Possible types are READ,
-                COMPUTE, and WRITE.
+            operation: The operation to be executed.
+            overlap_gpu_communication: Whether to overlap GPU communication with
+                computation during DAG execution to improve performance.
         Returns:
             True if the next operation should not be executed; otherwise, False.
         """
@@ -527,158 +534,6 @@ class ExecutableTask:
             return self._compute(operation, overlap_gpu_communication, class_handle)
         elif op_type == _DAGNodeOperationType.WRITE:
             return self._write(operation)
-
-    def set_stream_buffer(self, op: _DAGNodeOperation, data: Any):
-        """
-        Store the intermediate result of a READ or COMPUTE operation
-        in the stream buffer.
-
-        Args:
-            op: The operation that generates the intermediate result.
-            data: The intermediate result of a READ or COMPUTE operation.
-        """
-        self._stream_buffer[op.next_operation()] = data
-
-    def reset_stream_buffer(self, op: _DAGNodeOperation) -> Any:
-        """
-        Retrieve the intermediate result of a READ or COMPUTE operation
-        from the stream buffer and clear the entry from the buffer.
-
-        Returns:
-            The intermediate result of a READ or COMPUTE operation.
-        """
-        return self._stream_buffer.pop(op)
-
-    def _stream_read(self, op: _DAGNodeOperation) -> bool:
-        """
-        Read input data from upstream DAG nodes and cache the intermediate result.
-
-        Args:
-            op: The READ operation.
-
-        Returns:
-            True if system error occurs and exit the loop; otherwise, False.
-        """
-        exit = False
-        try:
-            input_data = self.input_reader.read()
-            self.set_stream_buffer(op, input_data)
-        except RayChannelError:
-            # Channel closed. Exit the loop.
-            exit = True
-        return exit
-
-    def _stream_compute(self, op: _DAGNodeOperation, exec_stream, class_handle) -> bool:
-        """
-        Retrieve the intermediate result from the READ operation and perform the
-        computation on the provided execution stream. Then, cache the new
-        intermediate result.
-
-        Args::
-            op: The compute operation.
-            exec_stream: The CUDA stream to execute the compute operation.
-            class_handle: An instance of the class to which the actor belongs. For
-                example, the type of `class_handle` is <class 'xxxx.Worker'> if the
-                actor belongs to the `class Worker` class.
-
-        Returns:
-            True if system error occurs and exit the loop; otherwise, False.
-        """
-        input_data = self.reset_stream_buffer(op)
-        method = getattr(class_handle, self.method_name)
-        try:
-            _process_return_vals(input_data, return_single_output=False)
-        except Exception as exc:
-            # Previous task raised an application-level exception.
-            # Propagate it and skip the actual task. We don't need to wrap the
-            # exception in a RayTaskError here because it has already been wrapped
-            # by the previous task.
-            self.set_stream_buffer(exc)
-            return False
-
-        import cupy as cp
-
-        channel_results = []
-        for entry in input_data:
-            if (
-                isinstance(entry, tuple)
-                and len(entry) == 2
-                and isinstance(entry[1], cp.cuda.Event)
-            ):
-                try:
-                    channel_result, event = entry
-                except Exception as exc:
-                    print(f"Got exception: {exc}")
-                    print(f"{entry=}")
-                if event:
-                    # TODO: wait on the default stream
-                    stream = cp.cuda.get_current_stream()
-                    stream.wait_event(event)
-            else:
-                channel_result = entry
-            channel_results.append(channel_result)
-
-        resolved_inputs = []
-        for task_input in self.task_inputs:
-            resolved_inputs.append(task_input.resolve(channel_results))
-
-        import cupy as cp
-
-        # with exec_stream:
-        try:
-            output_val = method(*resolved_inputs, **self.resolved_kwargs)
-        except Exception as exc:
-            output_val = _wrap_exception(exc)
-        exec_event = cp.cuda.Event()
-        exec_event.record(cp.cuda.get_current_stream())
-
-        self.set_stream_buffer(op, (output_val, exec_event))
-        return False
-
-    def _stream_write(self, op: _DAGNodeOperation) -> bool:
-        """
-        Retrieve the intermediate result from the COMPUTE operation and write to its
-        downstream DAG nodes. The caller must ensure that the last operation executed
-        is COMPUTE so that the function retrieves the correct intermediate result.
-
-        Returns:
-            True if system error occurs and exit the loop; otherwise, False.
-        """
-        output_val, exec_event = self.reset_stream_buffer(op)
-        exit = False
-        # FIXME
-        # exec_event.synchronize()
-        try:
-            self.output_writer.write(output_val, exec_event)
-        except RayChannelError:
-            # Channel closed. Exit the loop.
-            exit = True
-        return exit
-
-    def stream_operation(
-        self, class_handle, op: _DAGNodeOperation, exec_stream
-    ) -> bool:
-        """
-        An ExecutableTask corresponds to a DAGNode. It consists of three
-        operations: READ, COMPUTE, and WRITE, which should be executed in
-        order to ensure that each operation can read the correct intermediate
-        result.
-
-        Args:
-            class_handle: The handle of the class to which the actor belongs.
-            op_type: The type of the operation. Possible types are READ,
-                COMPUTE, and WRITE.
-
-        Returns:
-            True if the next operation should not be executed; otherwise, False.
-        """
-        op_type: _DAGNodeOperationType = op.type
-        if op_type == _DAGNodeOperationType.READ:
-            return self._stream_read(op)
-        elif op_type == _DAGNodeOperationType.COMPUTE:
-            return self._stream_compute(op, exec_stream, class_handle)
-        elif op_type == _DAGNodeOperationType.WRITE:
-            return self._stream_write(op)
 
 
 @dataclass
@@ -1523,9 +1378,7 @@ class CompiledDAG:
             self.actor_to_executable_tasks[actor_handle] = executable_tasks
 
         # Build an execution schedule for each actor
-        from ray.dag.constants import (
-            RAY_ADAG_ENABLE_PROFILING,
-        )
+        from ray.dag.constants import RAY_ADAG_ENABLE_PROFILING
 
         if RAY_ADAG_ENABLE_PROFILING:
             exec_task_func = do_profile_tasks

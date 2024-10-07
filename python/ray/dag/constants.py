@@ -17,10 +17,5 @@ RAY_ADAG_ENABLE_DETECT_DEADLOCK = (
 # Feature flag to turn on profiling.
 RAY_ADAG_ENABLE_PROFILING = os.environ.get("RAY_ADAG_ENABLE_PROFILING", "0") == "1"
 
-# Feature flag to turn on torch profiling.
-RAY_ADAG_ENABLE_TORCH_PROFILING = (
-    os.environ.get("RAY_ADAG_ENABLE_TORCH_PROFILING", "0") == "1"
-)
-
 # Feature flag to turn on visualization of the execution schedule.
 RAY_ADAG_VISUALIZE_SCHEDULE = os.environ.get("RAY_ADAG_VISUALIZE_SCHEDULE", "0") == "1"

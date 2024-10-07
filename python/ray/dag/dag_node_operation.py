@@ -2,9 +2,13 @@ from functools import total_ordering
 from enum import Enum
 from typing import Optional, Tuple, List, Dict
 import copy
+import logging
 import ray
 import heapq
 from collections import defaultdict
+
+
+logger = logging.getLogger(__name__)
 
 
 class _DAGNodeOperationType(Enum):
@@ -449,8 +453,11 @@ def _visualize_execution_schedule(
                 color = "blue" if label == "nccl" else "black"
                 dot.edge(node_repr, out_node_repr, label=label, color=color)
 
-    # Render the graph to a file or display it
-    dot.render("compiled_graph_schedule", format="png", view=True)
+    logger.info(
+        "Writing compiled graph schedule visualization "
+        "to compiled_graph_schedule.png"
+    )
+    dot.render("compiled_graph_schedule", format="png", view=False)
 
 
 def _generate_actor_to_execution_schedule(
@@ -552,7 +559,8 @@ def _optimize_execution_schedule(
                 and optimized_schedule[i].requires_nccl
             ):
                 # For each NCCL read operation (i.e., recv), scan backwards
-                # to find the nearest compute node to swap with
+                # to find the nearest compute node to swap with so that
+                # the NCCL read operation can be overlapped with computation.
                 for j in range(i - 1, -1, -1):
                     if (
                         optimized_schedule[j].operation.type
