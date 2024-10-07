@@ -69,7 +69,6 @@ class TorchTensorWorker:
         return torch.ones(shape, dtype=dtype, device=self.device) * value
 
     def recv(self, tensor):
-        # print(f"{tensor=}")
         # Check that tensor got loaded to the correct device.
         assert tensor.device == self.device
         return (tensor[0].item(), tensor.shape, tensor.dtype)

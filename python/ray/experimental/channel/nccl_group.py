@@ -90,11 +90,9 @@ class _NcclGroup(GPUCommunicator):
             actor_handles: A list of actor handles, in rank order.
             cuda_stream: A raw CUDA stream to dispatch NCCL ops to. If rank is
                 specified, then this must be specified too.
-            use_communication_streams: Whether to use one dedicated streams for
-                communication. This is useful for overlapping communication
-                with computation.
-                If this is True, then `cuda_stream` is not used and new streams
-                are created.
+            use_communication_streams: Whether to use dedicated send and recv
+                streams for communication. If True, communication and computation
+                can be overlapped to improve perfomrance.
         """
         self._world_size = world_size
         self._rank: Optional[int] = rank
