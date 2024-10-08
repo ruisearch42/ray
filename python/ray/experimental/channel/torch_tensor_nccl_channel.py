@@ -160,6 +160,12 @@ class NestedTorchTensorNcclChannel(ChannelInterface):
 
     def read(self, timeout: Optional[float] = None) -> Any:
         tensors = self._gpu_data_channel.read()
+        if isinstance(tensors, list):
+            for i, tensor in enumerate(tensors):
+                if isinstance(tensor, GPUFuture):
+                    tensors[i] = tensor.wait()
+        elif isinstance(tensors, GPUFuture):
+            tensors = tensors.wait()
 
         if self._gpu_data_channel.has_static_type():
             # If the channel was declared with a static TorchTensorType, then
