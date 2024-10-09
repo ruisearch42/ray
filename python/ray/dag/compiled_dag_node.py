@@ -119,7 +119,7 @@ def do_exec_tasks(
                 break
             for operation in schedule:
                 done = tasks[operation.exec_task_idx].exec_operation(
-                    self, operation, overlap_gpu_communication
+                    self, operation.type, overlap_gpu_communication
                 )
                 if done:
                     break
@@ -357,12 +357,9 @@ class ExecutableTask:
             self.output_channels, self.output_idxs
         )
         # Store the intermediate result of a READ or COMPUTE operation.
-        # The dict is from the operation to its input, i.e., the intermediate
-        # result from the last operation. There are only two cases:
-        # if the operation is COMPUTE, the value is the result from the READ with
-        # the same exec_task_idx; if the operation is WRITE, the value is the result
-        # from the COMPUTE with the same exec_task_idx.
-        self._intermediate_buffer: Dict[_DAGNodeOperation, Any] = {}
+        # The result of a READ operation will be used by a COMPUTE operation,
+        # and the result of a COMPUTE operation will be used by a WRITE operation.
+        self._intermediate_buffer: Any = None
 
     def cancel(self):
         """
@@ -384,43 +381,37 @@ class ExecutableTask:
         self.input_reader.start()
         self.output_writer.start()
 
-    def set_intermediate_buffer(self, operation: _DAGNodeOperation, data: Any):
+    def set_intermediate_buffer(self, data: Any):
         """
-        Store the intermediate result for a READ or COMPUTE operation.
-
+        Store the intermediate result of a READ or COMPUTE operation.
         Args:
-            operation: The operation that produced the intermediate result.
             data: The intermediate result of a READ or COMPUTE operation.
         """
-        self._intermediate_buffer[operation.next_operation()] = data
+        assert self._intermediate_buffer is None
+        self._intermediate_buffer = data
 
-    def reset_intermediate_buffer(self, operation: _DAGNodeOperation) -> Any:
+    def reset_intermediate_buffer(self) -> Any:
         """
         Retrieve the intermediate result of a READ or COMPUTE operation,
         and reset the intermediate buffer to None.
-
-        Args:
-            operation: The operation for which we want to retrieve and reset
-                the intermediate result.
-
         Returns:
-            The intermediate result for the operation.
+            The intermediate result of a READ or COMPUTE operation.
         """
-        return self._intermediate_buffer.pop(operation)
+        data = self._intermediate_buffer
+        self._intermediate_buffer = None
+        return data
 
-    def _read(self, operation: _DAGNodeOperation) -> bool:
+    def _read(self) -> bool:
         """
         Read input data from upstream DAG nodes and cache the intermediate result.
 
-        Args:
-            operation: The read operation corresponding to this read.
         Returns:
             True if system error occurs and exit the loop; otherwise, False.
         """
         exit = False
         try:
             input_data = self.input_reader.read()
-            self.set_intermediate_buffer(operation, input_data)
+            self.set_intermediate_buffer(input_data)
         except RayChannelError:
             # Channel closed. Exit the loop.
             exit = True
@@ -428,7 +419,6 @@ class ExecutableTask:
 
     def _compute(
         self,
-        operation: _DAGNodeOperation,
         overlap_gpu_communication: bool,
         class_handle,
     ) -> bool:
@@ -437,7 +427,6 @@ class ExecutableTask:
         computation. Then, cache the new intermediate result.
 
         Args:
-            operation: The compute operation corresponding to this compute.
             overlap_gpu_communication: Whether to overlap GPU communication with
                 computation during DAG execution to improve performance.
             class_handle: An instance of the class to which the actor belongs. For
@@ -446,7 +435,7 @@ class ExecutableTask:
         Returns:
             True if system error occurs and exit the loop; otherwise, False.
         """
-        input_data = self.reset_intermediate_buffer(operation)
+        input_data = self.reset_intermediate_buffer()
         method = getattr(class_handle, self.method_name)
         try:
             _process_return_vals(input_data, return_single_output=False)
@@ -455,7 +444,7 @@ class ExecutableTask:
             # Propagate it and skip the actual task. We don't need to wrap the
             # exception in a RayTaskError here because it has already been wrapped
             # by the previous task.
-            self.set_intermediate_buffer(operation, exc)
+            self.set_intermediate_buffer(exc)
             return False
 
         channel_results = []
@@ -481,24 +470,21 @@ class ExecutableTask:
             exec_event = cp.cuda.Event()
             exec_event.record(cp.cuda.get_current_stream())
             future = _GPUFuture(output_val, exec_event)
-            self.set_intermediate_buffer(operation, future)
+            self.set_intermediate_buffer(future)
         else:
-            self.set_intermediate_buffer(operation, output_val)
+            self.set_intermediate_buffer(output_val)
         return False
 
-    def _write(self, operation: _DAGNodeOperation) -> bool:
+    def _write(self) -> bool:
         """
         Retrieve the intermediate result from the COMPUTE operation and write to its
         downstream DAG nodes. The caller must ensure that the last operation executed
         is COMPUTE so that the function retrieves the correct intermediate result.
 
-        Args:
-            operation: The write operation corresponding to this write.
-
         Returns:
             True if system error occurs and exit the loop; otherwise, False.
         """
-        output_val = self.reset_intermediate_buffer(operation)
+        output_val = self.reset_intermediate_buffer()
         exit = False
         try:
             self.output_writer.write(output_val)
@@ -510,7 +496,7 @@ class ExecutableTask:
     def exec_operation(
         self,
         class_handle,
-        operation: _DAGNodeOperation,
+        op_type: _DAGNodeOperationType,
         overlap_gpu_communication: bool = False,
     ) -> bool:
         """
@@ -518,22 +504,21 @@ class ExecutableTask:
         operations: READ, COMPUTE, and WRITE, which should be executed in
         order to ensure that each operation can read the correct intermediate
         result.
-
         Args:
             class_handle: The handle of the class to which the actor belongs.
-            operation: The operation to be executed.
+            op_type: The type of the operation. Possible types are READ,
+                COMPUTE, and WRITE.
             overlap_gpu_communication: Whether to overlap GPU communication with
                 computation during DAG execution to improve performance.
         Returns:
             True if the next operation should not be executed; otherwise, False.
         """
-        op_type: _DAGNodeOperationType = operation.type
         if op_type == _DAGNodeOperationType.READ:
-            return self._read(operation)
+            return self._read()
         elif op_type == _DAGNodeOperationType.COMPUTE:
-            return self._compute(operation, overlap_gpu_communication, class_handle)
+            return self._compute(overlap_gpu_communication, class_handle)
         elif op_type == _DAGNodeOperationType.WRITE:
-            return self._write(operation)
+            return self._write()
 
 
 @dataclass
