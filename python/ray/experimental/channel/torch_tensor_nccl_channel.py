@@ -6,11 +6,11 @@ from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
 
 import ray
 import ray.util.serialization
+from ray.dag.dag_operation_future import DAGOperationFuture
 from ray.experimental.channel import ChannelContext
 from ray.experimental.channel.common import ChannelInterface
 from ray.experimental.channel.gpu_communicator import (
     GPUCommunicator,
-    GPUFuture,
     TorchTensorAllocator,
 )
 from ray.experimental.channel.nccl_group import _NcclGroup
@@ -162,9 +162,9 @@ class NestedTorchTensorNcclChannel(ChannelInterface):
         tensors = self._gpu_data_channel.read()
         if isinstance(tensors, list):
             for i, tensor in enumerate(tensors):
-                if isinstance(tensor, GPUFuture):
+                if isinstance(tensor, DAGOperationFuture):
                     tensors[i] = tensor.wait()
-        elif isinstance(tensors, GPUFuture):
+        elif isinstance(tensors, DAGOperationFuture):
             tensors = tensors.wait()
 
         if self._gpu_data_channel.has_static_type():
@@ -318,7 +318,7 @@ class TorchTensorNcclChannel(ChannelInterface):
     def _get_tensor_meta(self, tensor: "torch.Tensor") -> Optional["TorchTensorType"]:
         from ray.experimental.channel.torch_tensor_type import TorchTensorType
 
-        if isinstance(tensor, GPUFuture):
+        if isinstance(tensor, DAGOperationFuture):
             assert (
                 self.has_static_type()
             ), "Overlapping GPU communication requires static tensor type."
@@ -396,7 +396,9 @@ class TorchTensorNcclChannel(ChannelInterface):
 
     def read(
         self, timeout: Optional[float] = None
-    ) -> Union[GPUFuture["torch.Tensor"], List[GPUFuture["torch.Tensor"]]]:
+    ) -> Union[
+        DAGOperationFuture["torch.Tensor"], List[DAGOperationFuture["torch.Tensor"]]
+    ]:
         if self._meta_channel is not None:
             meta = self._meta_channel.read()
         else:
@@ -410,7 +412,7 @@ class TorchTensorNcclChannel(ChannelInterface):
                 self._torch_tensor_allocator,
             )
 
-        futures: List[GPUFuture["torch.Tensor"]] = []
+        futures: List[DAGOperationFuture["torch.Tensor"]] = []
         for typ in meta:
             future = self._nccl_group.recv(
                 typ._shape,

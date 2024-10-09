@@ -1,17 +1,8 @@
 from abc import ABC, abstractmethod
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Callable,
-    Generic,
-    List,
-    Optional,
-    Tuple,
-    TypeVar,
-    Union,
-)
+from typing import TYPE_CHECKING, Callable, List, Optional, Tuple
 
 import ray
+from ray.dag.compiled_dag_node import DAGOperationFuture
 from ray.util.annotations import DeveloperAPI
 
 if TYPE_CHECKING:
@@ -21,25 +12,6 @@ if TYPE_CHECKING:
 # Signature for a torch.Tensor allocator is:
 # (shape: Tuple[int], dtype: torch.dtype) -> torch.Tensor.
 TorchTensorAllocator = Callable[[Tuple[int], "torch.dtype"], "torch.Tensor"]
-
-T = TypeVar("T")
-
-
-@DeveloperAPI
-class GPUFuture(ABC, Generic[T]):
-    """
-    Future for a GPU operation.
-    """
-
-    @abstractmethod
-    def wait(self, waiter: Optional[Any]) -> T:
-        """
-        This method blocks until the operation is complete and returns the result.
-
-        Args:
-            waiter: The waiter to wait on the future.
-        """
-        raise NotImplementedError
 
 
 @DeveloperAPI
@@ -96,7 +68,9 @@ class GPUCommunicator(ABC):
 
     @abstractmethod
     def send(
-        self, value: Union["torch.Tensor", GPUFuture["torch.Tensor"]], peer_rank: int
+        self,
+        value: DAGOperationFuture["torch.Tensor"],
+        peer_rank: int,
     ) -> None:
         """
         Send a torch.Tensor to a peer.
@@ -120,7 +94,7 @@ class GPUCommunicator(ABC):
         dtype: "torch.dtype",
         peer_rank: int,
         allocator: Optional[TorchTensorAllocator] = None,
-    ) -> GPUFuture["torch.Tensor"]:
+    ) -> DAGOperationFuture["torch.Tensor"]:
         """
         Receive a torch.Tensor from a peer and synchronize.
 

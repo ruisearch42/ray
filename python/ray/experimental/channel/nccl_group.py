@@ -3,10 +3,10 @@ from types import ModuleType
 from typing import TYPE_CHECKING, List, Optional, Tuple, Union
 
 import ray
+from ray.dag.dag_operation_future import DAGOperationFuture, ReadyFuture
 from ray.exceptions import RayChannelError
 from ray.experimental.channel.gpu_communicator import (
     GPUCommunicator,
-    GPUFuture,
     TorchTensorAllocator,
 )
 
@@ -21,8 +21,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class _GPUFuture(GPUFuture["torch.Tensor"]):
-    def __init__(self, buf: "torch.Tensor", event: Optional["cp.cuda.Event"]):
+class _GPUFuture(DAGOperationFuture["torch.Tensor"]):
+    def __init__(self, buf: "torch.Tensor"):
         """
         Initialize a GPU future.
 
@@ -31,27 +31,33 @@ class _GPUFuture(GPUFuture["torch.Tensor"]):
             event: The CUDA event to wait on before returning the buffer.
                 If None, the buffer is immediately returned.
         """
+        import cupy as cp
+
         self._buf = buf
-        self._event = event
+        self._event = cp.cuda.Event()
+
+    def record_event(self, stream: "cp.cuda.Stream") -> None:
+        """
+        Record the event on the provided stream.
+        """
+        self._event.record(stream)
 
     def wait(
         self,
-        waiter_stream: Optional[
-            Union["cp.cuda.Stream", "cp.cuda.ExternalStream"]
-        ] = None,
+        waiter: Optional[Union["cp.cuda.Stream", "cp.cuda.ExternalStream"]] = None,
     ) -> "torch.Tensor":
         """
         Wait for the future to resolve and return the buffer.
 
         Args:
-            waiter_stream: The stream to wait on before returning the buffer.
+            waiter: The stream to wait on before returning the buffer.
                 If None, the current stream is used.
         """
         import cupy as cp
 
         if self._event:
-            if waiter_stream:
-                waiter_stream.wait_event(self._event)
+            if waiter:
+                waiter.wait_event(self._event)
             else:
                 current_stream = cp.cuda.get_current_stream()
                 current_stream.wait_event(self._event)
@@ -195,9 +201,7 @@ class _NcclGroup(GPUCommunicator):
         """
         return self._world_size
 
-    def send(
-        self, value: Union["torch.Tensor", GPUFuture["torch.Tensor"]], peer_rank: int
-    ) -> None:
+    def send(self, future: DAGOperationFuture["torch.Tensor"], peer_rank: int) -> None:
         """
         Send a torch.Tensor to a peer.
 
@@ -216,9 +220,9 @@ class _NcclGroup(GPUCommunicator):
         if self._closed:
             raise RayChannelError("NCCL group has been destroyed.")
 
-        if isinstance(value, GPUFuture):
-            self._send_stream.synchronize()
-            value = value.wait(self._send_stream)
+        self._send_stream.synchronize()
+        value = future.wait(self._send_stream)
+
         # TODO(swang): Handle send/recv async NCCL errors such as network
         # failures.
         self._comm.send(
@@ -237,7 +241,7 @@ class _NcclGroup(GPUCommunicator):
         dtype: "torch.dtype",
         peer_rank: int,
         allocator=Optional[TorchTensorAllocator],
-    ) -> GPUFuture["torch.Tensor"]:
+    ) -> DAGOperationFuture["torch.Tensor"]:
         """
         Receive a torch.Tensor from a peer and synchronize the current stream.
 
@@ -255,10 +259,8 @@ class _NcclGroup(GPUCommunicator):
         buf = allocator(shape, dtype)
 
         if self._use_communication_streams:
-            import cupy as cp
-
             self._recv_stream.synchronize()
-            event = cp.cuda.Event()
+            future = _GPUFuture(buf)
             self._comm.recv(
                 self.nccl_util.get_tensor_ptr(buf),
                 buf.numel(),
@@ -266,10 +268,10 @@ class _NcclGroup(GPUCommunicator):
                 peer_rank,
                 self._recv_stream.ptr,
             )
-            event.record(self._recv_stream)
+            future.record_event(self._recv_stream)
             if self._closed:
                 raise RayChannelError("NCCL group has been destroyed.")
-            return _GPUFuture(buf, event)
+            return future
         else:
             self._comm.recv(
                 self.nccl_util.get_tensor_ptr(buf),
@@ -286,7 +288,7 @@ class _NcclGroup(GPUCommunicator):
             self._cuda_stream.synchronize()
             if self._closed:
                 raise RayChannelError("NCCL group has been destroyed.")
-            return _GPUFuture(buf, None)
+            return ReadyFuture(buf)
 
     def destroy(self) -> None:
         """

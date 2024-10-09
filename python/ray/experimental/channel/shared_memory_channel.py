@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple, Union
 import ray
 import ray.exceptions
 from ray._raylet import SerializedObject
+from ray.dag.dag_operation_future import DAGOperationFuture
 from ray.experimental.channel.common import ChannelInterface, ChannelOutputType
 from ray.experimental.channel.intra_process_channel import IntraProcessChannel
 from ray.experimental.channel.torch_tensor_type import TorchTensorType
@@ -462,9 +463,7 @@ class Channel(ChannelInterface):
         # -1 means no timeout (block indefinitely)
         timeout_ms = int(timeout * 1000) if timeout is not None else -1
 
-        from ray.experimental.channel.gpu_communicator import GPUFuture
-
-        if isinstance(value, GPUFuture):
+        if isinstance(value, DAGOperationFuture):
             value = value.wait()
 
         if not isinstance(value, SerializedObject):

@@ -8,9 +8,10 @@ import time
 import uuid
 import traceback
 
+from ray.dag.dag_operation_future import DAGOperationFuture, ReadyFuture
 from ray.experimental.channel.nccl_group import _GPUFuture
 from ray.experimental.channel.cached_channel import CachedChannel
-from ray.experimental.channel.gpu_communicator import GPUCommunicator, GPUFuture
+from ray.experimental.channel.gpu_communicator import GPUCommunicator
 import ray
 from ray.exceptions import RayTaskError, RayChannelError
 from ray.experimental.compiled_dag_ref import (
@@ -449,10 +450,8 @@ class ExecutableTask:
 
         channel_results = []
         for entry in input_data:
-            if isinstance(entry, GPUFuture):
-                channel_result = entry.wait()
-            else:
-                channel_result = entry
+            assert isinstance(entry, DAGOperationFuture)
+            channel_result = entry.wait()
             channel_results.append(channel_result)
 
         resolved_inputs = []
@@ -467,12 +466,11 @@ class ExecutableTask:
         if overlap_gpu_communication:
             import cupy as cp
 
-            exec_event = cp.cuda.Event()
-            exec_event.record(cp.cuda.get_current_stream())
-            future = _GPUFuture(output_val, exec_event)
-            self.set_intermediate_buffer(future)
+            future = _GPUFuture(output_val)
+            future.record_event(cp.cuda.get_current_stream())
         else:
-            self.set_intermediate_buffer(output_val)
+            future = ReadyFuture(output_val)
+        self.set_intermediate_buffer(future)
         return False
 
     def _write(self) -> bool:
