@@ -278,7 +278,9 @@ class _ExecutableTaskInput:
         """
 
         if isinstance(self.input_variant, ChannelInterface):
-            value = channel_results[self.channel_idx]
+            future = channel_results[self.channel_idx]
+            assert isinstance(future, DAGOperationFuture)
+            value = future.wait()
         else:
             value = self.input_variant
         return value
@@ -382,7 +384,7 @@ class ExecutableTask:
         self.input_reader.start()
         self.output_writer.start()
 
-    def set_intermediate_buffer(self, data: Any):
+    def set_intermediate_buffer(self, data: DAGOperationFuture):
         """
         Store the intermediate result of a READ or COMPUTE operation.
         Args:
@@ -391,7 +393,7 @@ class ExecutableTask:
         assert self._intermediate_buffer is None
         self._intermediate_buffer = data
 
-    def reset_intermediate_buffer(self) -> Any:
+    def reset_intermediate_buffer(self) -> DAGOperationFuture:
         """
         Retrieve the intermediate result of a READ or COMPUTE operation,
         and reset the intermediate buffer to None.
@@ -448,15 +450,9 @@ class ExecutableTask:
             self.set_intermediate_buffer(exc)
             return False
 
-        channel_results = []
-        for entry in input_data:
-            assert isinstance(entry, DAGOperationFuture)
-            channel_result = entry.wait()
-            channel_results.append(channel_result)
-
         resolved_inputs = []
         for task_input in self.task_inputs:
-            resolved_inputs.append(task_input.resolve(channel_results))
+            resolved_inputs.append(task_input.resolve(input_data))
 
         try:
             output_val = method(*resolved_inputs, **self.resolved_kwargs)
@@ -482,10 +478,10 @@ class ExecutableTask:
         Returns:
             True if system error occurs and exit the loop; otherwise, False.
         """
-        output_val = self.reset_intermediate_buffer()
+        future = self.reset_intermediate_buffer()
         exit = False
         try:
-            self.output_writer.write(output_val)
+            self.output_writer.write(future)
         except RayChannelError:
             # Channel closed. Exit the loop.
             exit = True

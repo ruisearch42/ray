@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple, Union
 import ray
 import ray.exceptions
 from ray._raylet import SerializedObject
-from ray.dag.dag_operation_future import DAGOperationFuture
+from ray.dag.dag_operation_future import DAGOperationFuture, ReadyFuture
 from ray.experimental.channel.common import ChannelInterface, ChannelOutputType
 from ray.experimental.channel.intra_process_channel import IntraProcessChannel
 from ray.experimental.channel.torch_tensor_type import TorchTensorType
@@ -455,7 +455,9 @@ class Channel(ChannelInterface):
             #     prev_writer_ref
             # )
 
-    def write(self, value: Any, timeout: Optional[float] = None) -> None:
+    def write(
+        self, future: DAGOperationFuture, timeout: Optional[float] = None
+    ) -> None:
         self.ensure_registered_as_writer()
         assert (
             timeout is None or timeout >= 0 or timeout == -1
@@ -463,8 +465,7 @@ class Channel(ChannelInterface):
         # -1 means no timeout (block indefinitely)
         timeout_ms = int(timeout * 1000) if timeout is not None else -1
 
-        if isinstance(value, DAGOperationFuture):
-            value = value.wait()
+        value = future.wait()
 
         if not isinstance(value, SerializedObject):
             try:
@@ -496,7 +497,7 @@ class Channel(ChannelInterface):
             timeout_ms,
         )
 
-    def read(self, timeout: Optional[float] = None) -> Any:
+    def read(self, timeout: Optional[float] = None) -> DAGOperationFuture:
         assert (
             timeout is None or timeout >= 0 or timeout == -1
         ), "Timeout must be non-negative or -1."
@@ -522,7 +523,7 @@ class Channel(ChannelInterface):
                 [self._local_reader_ref], timeout=timeout, return_exceptions=True
             )[0][0]
 
-        return ret
+        return ReadyFuture(ret)
 
     def close(self) -> None:
         """
