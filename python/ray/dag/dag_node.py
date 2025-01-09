@@ -1,8 +1,9 @@
+from ray.experimental.channel.shared_memory_channel import SharedMemoryType
+from ray.experimental.channel.torch_tensor_type import TorchTensorType
 import ray
 from ray.dag.base import DAGNodeBase
 from ray.dag.py_obj_scanner import _PyObjScanner
 from ray.util.annotations import DeveloperAPI
-import copy
 
 from itertools import chain
 
@@ -21,6 +22,7 @@ import asyncio
 
 from ray.dag.compiled_dag_node import build_compiled_dag_from_ray_dag
 from ray.experimental.channel import ChannelOutputType
+from ray.experimental.channel.communicator import Communicator
 
 T = TypeVar("T")
 
@@ -78,7 +80,11 @@ class DAGNode(DAGNodeBase):
         # Cached values from last call to execute()
         self.cache_from_last_execute = {}
 
-        self._type_hint: ChannelOutputType = ChannelOutputType()
+        self._type_hint: ChannelOutputType = SharedMemoryType()
+        self._tensor_transport: Optional[Union[str, Communicator]] = None
+        self._tensor_static_shape: Optional[bool] = None
+        self._static_tensor_schema: Optional[bool] = None
+
         # Whether this node calls `experimental_compile`.
         self.is_cgraph_output_node = False
 
@@ -129,13 +135,70 @@ class DAGNode(DAGNodeBase):
             upstream_node._downstream_nodes.append(self)
         return upstream_nodes
 
-    def with_type_hint(self, typ: ChannelOutputType):
-        self._type_hint = copy.deepcopy(typ)
+    def with_tensor_transport(
+        self,
+        transport: Optional[Union[str, Communicator]] = "auto",
+        _static_shape: bool = True,
+        _direct_return: bool = False,
+    ):
+        if transport == "auto":
+            self._type_hint = SharedMemoryType()
+        elif transport == "nccl":
+            self._type_hint = TorchTensorType(
+                transport=transport,
+                _static_shape=_static_shape,
+                _direct_return=_direct_return,
+            )
+        else:
+            self._type_hint = TorchTensorType(
+                transport=transport,
+                _static_shape=_static_shape,
+                _direct_return=_direct_return,
+            )
+        self._tensor_transport = transport
+        self._tensor_static_shape = _static_shape
+        self._tensor_direct_return = _direct_return
         return self
 
     @property
     def type_hint(self) -> ChannelOutputType:
         return self._type_hint
+
+    def requires_nccl(self) -> bool:
+        return self._tensor_transport == "nccl" or isinstance(
+            self._tensor_transport, Communicator
+        )
+
+    @property
+    def custom_communicator(self) -> Optional[Communicator]:
+        return (
+            self._tensor_transport
+            if isinstance(self._tensor_transport, Communicator)
+            else None
+        )
+
+    @property
+    def tensor_transport(self) -> Optional[Union[str, Communicator]]:
+        return self._tensor_transport
+
+    @property
+    def static_tensor_shape(self) -> Optional[bool]:
+        return self._tensor_static_shape
+
+    @property
+    def static_tensor_schema(self) -> Optional[bool]:
+        return self._static_tensor_schema
+
+    @property
+    def channel_type_str(self) -> str:
+        if self._tensor_transport is None or self._tensor_transport == "auto":
+            return "SharedMemoryChannel"
+        elif self._tensor_transport == "nccl" or isinstance(
+            self._tensor_transport, Communicator
+        ):
+            return "NcclChannel"
+        else:
+            return "UnknownChannel"
 
     def get_args(self) -> Tuple[Any]:
         """Return the tuple of arguments for this node."""
@@ -575,7 +638,12 @@ class DAGNode(DAGNodeBase):
             new_args, new_kwargs, new_options, new_other_args_to_resolve
         )
         instance._stable_uuid = self._stable_uuid
-        instance = instance.with_type_hint(self.type_hint)
+        instance = instance.with_tensor_transport(
+            transport=self.tensor_transport,
+            has_static_shape=self.tensor_has_static_shape,
+            has_static_schema=self.tensor_has_static_schema,
+            direct_return=self.tensor_direct_return,
+        )
         return instance
 
     def __getstate__(self):

@@ -1041,9 +1041,9 @@ class CompiledDAG:
                     )
 
                 # Collect actors for NCCL P2P methods.
-                if dag_node.type_hint.requires_nccl():
+                if dag_node.requires_nccl():
                     nccl_actors_p2p.add(actor_handle)
-                    custom_communicator = dag_node.type_hint.get_custom_communicator()
+                    custom_communicator = dag_node.custom_communicator
                     mixed_nccl_group_error_message = (
                         "Compiled Graphs do not support mixed usage of "
                         "type hints of default NCCL group "
@@ -1080,16 +1080,11 @@ class CompiledDAG:
                         "overlap_gpu_communication=False."
                     )
             elif isinstance(dag_node, InputNode):
-                if dag_node.type_hint.requires_nccl():
+                if dag_node.requires_nccl():
                     raise ValueError(
                         "DAG inputs cannot be transferred via NCCL because "
                         "the driver cannot participate in the NCCL group"
                     )
-
-            if type(dag_node.type_hint) == ChannelOutputType:
-                # No type hint specified by the user. Replace
-                # with the default type hint for this DAG.
-                dag_node.with_type_hint(self._default_type_hint)
 
             for _, val in task.kwargs.items():
                 if isinstance(val, DAGNode):
@@ -1149,7 +1144,7 @@ class CompiledDAG:
 
                 upstream_task.downstream_task_idxs[task_idx] = downstream_actor_handle
 
-                if upstream_task.dag_node.type_hint.requires_nccl():
+                if upstream_task.dag_node.requires_nccl():
                     # Add all readers to the NCCL actors of P2P.
                     nccl_actors_p2p.add(downstream_actor_handle)
 
@@ -2714,11 +2709,7 @@ class CompiledDAG:
 
             # Add the node to the graph with attributes
             dot.node(str(idx), label, shape=shape, style=style, fillcolor=fillcolor)
-            channel_type_str = (
-                type(dag_node.type_hint).__name__
-                if dag_node.type_hint
-                else "UnknownType"
-            ) + "\n"
+            channel_type_str = dag_node.channel_type_str + "\n"
 
             # This logic is built on the assumption that there will only be multiple
             # output channels if the task has multiple returns
