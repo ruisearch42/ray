@@ -1,3 +1,4 @@
+import copy
 from ray.experimental.channel.shared_memory_channel import SharedMemoryType
 from ray.experimental.channel.torch_tensor_type import TorchTensorType
 import ray
@@ -81,9 +82,6 @@ class DAGNode(DAGNodeBase):
         self.cache_from_last_execute = {}
 
         self._type_hint: ChannelOutputType = SharedMemoryType()
-        self._tensor_transport: Optional[Union[str, Communicator]] = None
-        self._tensor_static_shape: Optional[bool] = None
-        self._static_tensor_schema: Optional[bool] = None
 
         # Whether this node calls `experimental_compile`.
         self.is_cgraph_output_node = False
@@ -155,9 +153,6 @@ class DAGNode(DAGNodeBase):
                 _static_shape=_static_shape,
                 _direct_return=_direct_return,
             )
-        self._tensor_transport = transport
-        self._tensor_static_shape = _static_shape
-        self._tensor_direct_return = _direct_return
         return self
 
     @property
@@ -184,10 +179,6 @@ class DAGNode(DAGNodeBase):
     @property
     def static_tensor_shape(self) -> Optional[bool]:
         return self._tensor_static_shape
-
-    @property
-    def static_tensor_schema(self) -> Optional[bool]:
-        return self._static_tensor_schema
 
     @property
     def channel_type_str(self) -> str:
@@ -638,12 +629,7 @@ class DAGNode(DAGNodeBase):
             new_args, new_kwargs, new_options, new_other_args_to_resolve
         )
         instance._stable_uuid = self._stable_uuid
-        instance = instance.with_tensor_transport(
-            transport=self.tensor_transport,
-            has_static_shape=self.tensor_has_static_shape,
-            has_static_schema=self.tensor_has_static_schema,
-            direct_return=self.tensor_direct_return,
-        )
+        instance._type_hint = copy.deepcopy(self._type_hint)
         return instance
 
     def __getstate__(self):
