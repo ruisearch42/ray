@@ -159,38 +159,6 @@ class DAGNode(DAGNodeBase):
     def type_hint(self) -> ChannelOutputType:
         return self._type_hint
 
-    def requires_nccl(self) -> bool:
-        return self._tensor_transport == "nccl" or isinstance(
-            self._tensor_transport, Communicator
-        )
-
-    @property
-    def custom_communicator(self) -> Optional[Communicator]:
-        return (
-            self._tensor_transport
-            if isinstance(self._tensor_transport, Communicator)
-            else None
-        )
-
-    @property
-    def tensor_transport(self) -> Optional[Union[str, Communicator]]:
-        return self._tensor_transport
-
-    @property
-    def static_tensor_shape(self) -> Optional[bool]:
-        return self._tensor_static_shape
-
-    @property
-    def channel_type_str(self) -> str:
-        if self._tensor_transport is None or self._tensor_transport == "auto":
-            return "SharedMemoryChannel"
-        elif self._tensor_transport == "nccl" or isinstance(
-            self._tensor_transport, Communicator
-        ):
-            return "NcclChannel"
-        else:
-            return "UnknownChannel"
-
     def get_args(self) -> Tuple[Any]:
         """Return the tuple of arguments for this node."""
 
