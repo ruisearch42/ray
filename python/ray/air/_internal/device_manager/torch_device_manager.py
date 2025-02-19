@@ -6,7 +6,7 @@ import torch
 
 class TorchDeviceManager(ABC):
     """This class contains the function needed for supporting
-    an acclerator family in Ray AI Library.
+    an accelerator family in Ray AI Library.
     """
 
     def is_available(self) -> bool:
