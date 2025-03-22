@@ -407,6 +407,7 @@ void ReferenceCounter::ReleaseAllLocalReferences() {
   for (const auto &object_id_to_remove : refs_to_remove) {
     RemoveLocalReferenceInternal(object_id_to_remove, nullptr);
   }
+  local_refs_cleaned_.store(true);
 }
 
 void ReferenceCounter::RemoveLocalReference(const ObjectID &object_id,
@@ -977,7 +978,7 @@ bool ReferenceCounter::GetAndClearLocalBorrowersInternal(
   RAY_LOG(DEBUG).WithField(object_id) << "Pop object for_ref_removed " << for_ref_removed;
   auto it = object_id_refs_.find(object_id);
   if (it == object_id_refs_.end()) {
-    return false;
+    return local_refs_cleaned_.load();
   }
 
   auto &ref = it->second;

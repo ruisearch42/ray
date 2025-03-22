@@ -1040,6 +1040,9 @@ class ReferenceCounter : public ReferenceCounterInterface,
   /// Holds all reference counts and dependency information for tracked ObjectIDs.
   ReferenceTable object_id_refs_ ABSL_GUARDED_BY(mutex_);
 
+  /// Whether the local references have been cleaned up.
+  std::atomic<bool> local_refs_cleaned_;
+
   /// Objects whose values have been freed by the language frontend.
   /// The values in plasma will not be pinned. An object ID is
   /// removed from this set once its Reference has been deleted
