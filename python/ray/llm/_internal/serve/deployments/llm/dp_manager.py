@@ -3,6 +3,11 @@ import argparse
 from typing import Any, Callable, Dict, Optional
 
 from ray import serve
+import ray
+from ray._private.state import available_resources_per_node
+from ray.util.scheduling_strategies import (
+    PlacementGroupSchedulingStrategy)
+from ray.util.state import list_nodes
 from vllm.v1.executor.abstract import Executor
 from vllm import AsyncEngineArgs
 from vllm.config import ParallelConfig, VllmConfig
@@ -25,6 +30,8 @@ class MockCoreEngineActorManager:
         addresses,
         executor_class: type[Executor],
         log_stats: bool,
+        placement_groups=None,
+        local_dp_ranks: Optional[list[int]] = None,
     ):
         pass
 
@@ -58,6 +65,7 @@ class DPManager:
             api_server_count: int,
             ):
 
+        self.data_parallel_address = data_parallel_address
         # TODO: should api_server_count and MockAPIServerProcessManager
         # be part of LLMServer deployment? 
         engine_args = self._get_dp_config(llm_config,
@@ -66,8 +74,8 @@ class DPManager:
                             data_parallel_address,
                             )
     
-        vllm_config = engine_args.create_engine_config()
-        parallel_config = vllm_config.parallel_config
+        self.vllm_config = engine_args.create_engine_config()
+        parallel_config = self.vllm_config.parallel_config
         local_only = data_parallel_size == data_parallel_size_local
 
         # Set up input and output addresses.
@@ -85,14 +93,21 @@ class DPManager:
             "output_addresses": output_addresses,
         }
 
+        coordinator = MockDPCoordinator(parallel_config)
+        addresses.update(coordinator.get_engine_socket_addresses())
+        stats_update_address = coordinator.get_stats_publish_address()
+        placement_groups, local_dp_ranks = self._decide_placement()
+
         self.dp_engine_manager = MockCoreEngineActorManager(
             local_engine_count=data_parallel_size_local,
             start_index=0,
             local_start_index=0,
-            vllm_config=vllm_config,
+            vllm_config=self.vllm_config,
             addresses=addresses,
-            executor_class=Executor.get_class(vllm_config),
+            executor_class=Executor.get_class(self.vllm_config),
             log_stats=False,
+            placement_groups=placement_groups,
+            local_dp_ranks=local_dp_ranks,
         )
 
     def _get_dp_args(self,
@@ -112,7 +127,7 @@ class DPManager:
         if isinstance(llm_config.model_loading_config.model_source, str):
             model = llm_config.model_loading_config.model_source
 
-        return vllm.engine.arg_utils.AsyncEngineArgs(
+        return AsyncEngineArgs(
             **{
                 "model": model,
                 "data_parallel_backend": "ray",
@@ -123,6 +138,66 @@ class DPManager:
                 **engine_config.get_initialization_kwargs(),
             }
         )
+
+    def _decide_placement(self):
+        # TODO: is head_node_ip the same as data_parallel_address?
+        head_node_ip = self.data_parallel_address
+        vllm_config = self.vllm_config
+        local_engine_count = vllm_config.parallel_config.data_parallel_size_local
+        dp_size = vllm_config.parallel_config.data_parallel_size
+        world_size = vllm_config.parallel_config.world_size
+
+        nodes = list_nodes()
+        nodes = sorted(list_nodes(),
+                        key=lambda node: node.node_ip != head_node_ip)
+        assert nodes[0].node_ip == head_node_ip, (
+            "The first node must be the head node")
+        assert len(nodes) == 1 or nodes[1].node_ip != head_node_ip, (
+            "There can only be one head node")
+
+        available_resources = available_resources_per_node()
+        world_size = vllm_config.parallel_config.world_size
+        placement_groups = []
+        local_dp_ranks = []
+
+        for node in nodes:
+            node_ip = node.node_ip
+            node_resources = available_resources[node.node_id]
+            # For now, each DP rank can only be assigned to one node
+            # TODO(rui): support allocating a single DP rank
+            # to multiple nodes
+            available_engine_count = node_resources["GPU"] // world_size
+            if node_ip == head_node_ip:
+                assert available_engine_count >= local_engine_count, (
+                    "Not enough resources to allocate DP ranks "
+                    f"on DP master node {node_ip}")
+                for i in range(local_engine_count):
+                    bundles = [{
+                        "GPU": 1.0,
+                        "node:" + head_node_ip: 0.001
+                    }] * world_size + [{
+                        "CPU": 1.0
+                    }]
+                    pg = ray.util.placement_group(
+                        name=f"dp_rank_{len(placement_groups)}",
+                        strategy="STRICT_PACK",
+                        bundles=bundles,
+                    )
+                    placement_groups.append(pg)
+                    local_dp_ranks.append(i)
+            else:
+                for i in range(available_engine_count):
+                    if len(placement_groups) == dp_size:
+                        break
+                    bundles = [{"GPU": 1.0}] * world_size + [{"CPU": 1.0}]
+                    pg = ray.util.placement_group(
+                        name=f"dp_rank_{len(placement_groups)}",
+                        strategy="STRICT_PACK",
+                        bundles=bundles,
+                    )
+                    placement_groups.append(pg)
+                    local_dp_ranks.append(i)
+        return placement_groups, local_dp_ranks
 
     @classmethod
     def as_deployment(
