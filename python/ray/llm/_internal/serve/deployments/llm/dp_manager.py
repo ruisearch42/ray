@@ -1,8 +1,15 @@
 import os
+import argparse
 from typing import Any, Callable, Dict, Optional
 
 from ray import serve
+from vllm.v1.executor.abstract import Executor
+from vllm import AsyncEngineArgs
+from vllm.config import ParallelConfig, VllmConfig
 
+from ray.llm._internal.serve.configs.server_models import (
+    LLMConfig,
+)
 from ray.llm._internal.serve.configs.constants import (
     DEFAULT_HEALTH_CHECK_PERIOD_S,
     DEFAULT_HEALTH_CHECK_TIMEOUT_S,
@@ -48,8 +55,11 @@ class DPManager:
             data_parallel_size: int,
             data_parallel_size_local: int,
             data_parallel_address: str,
+            api_server_count: int,
             ):
 
+        # TODO: should api_server_count and MockAPIServerProcessManager
+        # be part of LLMServer deployment? 
         engine_args = self._get_dp_config(llm_config,
                             data_parallel_size,
                             data_parallel_size_local,
@@ -58,15 +68,30 @@ class DPManager:
     
         vllm_config = engine_args.create_engine_config()
         parallel_config = vllm_config.parallel_config
+        local_only = data_parallel_size == data_parallel_size_local
 
+        # Set up input and output addresses.
+        input_addresses = [
+            get_engine_client_zmq_addr(local_only, data_parallel_address)
+            for _ in range(api_server_count)
+        ]
+        output_addresses = [
+            get_engine_client_zmq_addr(local_only, data_parallel_address)
+            for _ in range(api_server_count)
+        ]
+
+        addresses: dict[str, Any] = {
+            "input_addresses": input_addresses,
+            "output_addresses": output_addresses,
+        }
 
         self.dp_engine_manager = MockCoreEngineActorManager(
             local_engine_count=data_parallel_size_local,
             start_index=0,
             local_start_index=0,
             vllm_config=vllm_config,
-            addresses=[],
-            executor_class=Executor,
+            addresses=addresses,
+            executor_class=Executor.get_class(vllm_config),
             log_stats=False,
         )
 
@@ -126,3 +151,61 @@ class DPManager:
 )
 class DPDeployment(DPManager):
     ...
+
+
+def get_tcp_uri(ip: str, port: int) -> str:
+    # Brackets are not permitted in ipv4 addresses,
+    # see https://github.com/python/cpython/issues/103848
+    return f"tcp://[{ip}]:{port}" if ":" in ip else f"tcp://{ip}:{port}"
+
+
+def get_open_zmq_ipc_path() -> str:
+    base_rpc_path = envs.VLLM_RPC_BASE_PATH
+    return f"ipc://{base_rpc_path}/{uuid4()}"
+
+def get_engine_client_zmq_addr(local_only: bool,
+                               host: str,
+                               port: int = 0) -> str:
+    return get_open_zmq_ipc_path() if local_only else (get_tcp_uri(
+        host, port or get_open_port()))
+
+def get_open_port() -> int:
+    """
+    Get an open port for the vLLM process to listen on.
+    An edge case to handle, is when we run data parallel,
+    we need to avoid ports that are potentially used by
+    the data parallel master process.
+    Right now we reserve 10 ports for the data parallel master
+    process. Currently it uses 2 ports.
+    """
+    if "VLLM_DP_MASTER_PORT" in os.environ:
+        dp_master_port = envs.VLLM_DP_MASTER_PORT
+        reserved_port_range = range(dp_master_port, dp_master_port + 10)
+        while True:
+            candidate_port = _get_open_port()
+            if candidate_port not in reserved_port_range:
+                return candidate_port
+    return _get_open_port()
+
+def _get_open_port() -> int:
+    port = envs.VLLM_PORT
+    if port is not None:
+        while True:
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.bind(("", port))
+                    return port
+            except OSError:
+                port += 1  # Increment port number if already in use
+                logger.info("Port %d is already in use, trying port %d",
+                            port - 1, port)
+    # try ipv4
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("", 0))
+            return s.getsockname()[1]
+    except OSError:
+        # try ipv6
+        with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as s:
+            s.bind(("", 0))
+            return s.getsockname()[1]
