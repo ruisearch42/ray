@@ -1,5 +1,6 @@
 from typing import List, Optional, Sequence
 
+from ray.llm._internal.serve.deployments.llm.dp_manager import DPManager
 from ray.serve.deployment import Application
 from ray.serve.handle import DeploymentHandle
 
@@ -66,7 +67,18 @@ def build_openai_app(llm_serving_args: LLMServingArgs) -> Application:
             "List of models is empty. Maybe some parameters cannot be parsed into the LLMConfig config."
         )
 
-    llm_deployments = _get_llm_deployments(llm_configs)
+    engine_kwargs = llm_serving_args.engine_kwargs
+    dp_size = engine_kwargs.get("data_parallel_size", 1)
+    if dp_size > 1:
+        dp_manager = DPManager.as_deployment(llm_configs)
+    else:
+        dp_manager = None
+
+    # TODO: check dp_manager type correctness
+    deployment_kwargs = {
+        "dp_manager": dp_manager,
+    }
+    llm_deployments = _get_llm_deployments(llm_configs, deployment_kwargs=deployment_kwargs)
 
     return LLMRouter.as_deployment(llm_configs=llm_configs).bind(
         llm_deployments=llm_deployments
