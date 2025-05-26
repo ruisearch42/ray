@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from typing import AsyncGenerator, Dict, Any, Optional, Type, Union
 
 # Third-party imports
+from ray.llm._internal.serve.deployments.llm.dp_manager import DPManager
 from ray import serve
 from ray._common.utils import import_attr
 
@@ -52,7 +53,7 @@ from ray.llm._internal.serve.deployments.llm.image_retriever import ImageRetriev
 from ray.llm._internal.serve.deployments.llm.multiplex.lora_model_loader import (
     LoraModelLoader,
 )
-from ray.llm._internal.serve.deployments.llm.vllm.vllm_engine import VLLMEngine
+from ray.llm._internal.serve.deployments.llm.vllm.vllm_engine import VLLMDPEngine, VLLMEngine
 from ray.llm._internal.serve.deployments.llm.vllm.vllm_models import (
     VLLMEmbeddingRequest,
 )
@@ -419,6 +420,7 @@ class LLMServer(_LLMServerBase):
         engine_cls: Optional[Type[LLMEngine]] = None,
         image_retriever_cls: Optional[Type[ImageRetriever]] = None,
         model_downloader: Optional[LoraModelLoader] = None,
+        dp_manager: Optional[DPManager] = None,
     ):
         """Constructor of LLMServer.
 
@@ -435,8 +437,19 @@ class LLMServer(_LLMServerBase):
                 Defaults to `ImageRetriever`.
             model_downloader: Dependency injection for the model downloader object.
                 Defaults to be initialized with `LoraModelLoader`.
+            dp_manager: Dependency injection for the dp manager object.
+                Defaults to `DPManager`.
         """
         await super().__init__(llm_config)
+
+        # TODO: double check init order, which one should be initialized first?
+        self.dp_manager = dp_manager
+
+        engine_kwargs = llm_config.engine_kwargs
+        api_server_count = engine_kwargs.get("api_server_count", 1)
+        if api_server_count > 1:
+            logger.info(f"Using VLLMDPEngine with {api_server_count} async engines")
+            self._default_engine_cls = VLLMDPEngine
 
         self._engine_cls = engine_cls or self._default_engine_cls
         self.engine = self._get_engine_class(self._llm_config)

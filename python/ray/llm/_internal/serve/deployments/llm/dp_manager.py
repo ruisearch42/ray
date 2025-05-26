@@ -64,6 +64,7 @@ class DPManager:
             data_parallel_address: str,
             api_server_count: int,
             ):
+        # TODO: move other params to LLMConfig
 
         self.data_parallel_address = data_parallel_address
         # TODO: should api_server_count and MockAPIServerProcessManager

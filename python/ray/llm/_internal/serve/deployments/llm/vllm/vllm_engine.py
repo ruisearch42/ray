@@ -1,5 +1,6 @@
 import asyncio
 import os
+import random
 import time
 from typing import AsyncGenerator, List, Optional, Tuple, TYPE_CHECKING
 import uuid
@@ -992,3 +993,34 @@ class VLLMEngine(LLMEngine):
                         )
                     ]
         return return_log_probs, log_probs_idx + len(return_log_probs)
+
+
+class VLLMDPEngine(LLMEngine):
+    def __init__(self, llm_config: LLMConfig):
+        self.llm_config = llm_config
+
+        engine_kwargs = llm_config.engine_kwargs
+        api_server_count = engine_kwargs.get("api_server_count", 1)
+        assert api_server_count > 0, "api_server_count must be greater than 0"
+
+        self.engines = []
+        for _ in range(api_server_count):
+            engine = VLLMEngine(llm_config)
+            self.engines.append(engine)
+
+    async def start(self):
+        for engine in self.engines:
+            await engine.start()
+
+    async def generate(self, request: GenerationRequest) -> AsyncGenerator[LLMRawResponse, None]:
+        # TODO: use proper load balancing strategy
+        random_engine = random.choice(self.engines)
+        return await random_engine.generate(request)
+
+    async def check_health(self) -> None:
+        for engine in self.engines:
+            await engine.check_health()
+
+    async def abort(self, request_id: str) -> None:
+        for engine in self.engines:
+            await engine.abort(request_id)
