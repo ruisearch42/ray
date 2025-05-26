@@ -64,7 +64,13 @@ class DPManager:
             data_parallel_address: str,
             api_server_count: int,
             ):
-        # TODO: move other params to LLMConfig
+        engine_kwargs = llm_config.engine_kwargs
+        api_server_count = engine_kwargs.get("api_server_count", 1)
+        data_parallel_size = engine_kwargs.get("data_parallel_size", 1)
+        data_parallel_size_local = engine_kwargs.get("data_parallel_size_local", 1)
+        data_parallel_address = engine_kwargs.get("data_parallel_address", None)
+        # TODO: determine data_parallel_address if not passed in
+        assert data_parallel_address is not None, "data_parallel_address must be set"
 
         self.data_parallel_address = data_parallel_address
         # TODO: should api_server_count and MockAPIServerProcessManager
