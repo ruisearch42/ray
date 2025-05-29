@@ -1,5 +1,6 @@
 from typing import List, Optional, Sequence
 
+from ray.llm._internal.serve.deployments.llm.dp_manager import DPManagerDeployment
 from ray.serve.deployment import Application
 from ray.serve.handle import DeploymentHandle
 
@@ -29,6 +30,15 @@ def build_llm_deployment(
     deployment_options = llm_config.get_serve_options(
         name_prefix=name_prefix,
     )
+
+    engine_kwargs = llm_config.engine_kwargs
+    dp_size = engine_kwargs.get("data_parallel_size", 1)
+    if dp_size > 1:
+        dp_manager = DPManagerDeployment.bind(llm_config)
+    else:
+        dp_manager = None
+
+    deployment_kwargs.update({"dp_manager": dp_manager})
 
     return LLMDeployment.options(**deployment_options).bind(
         llm_config=llm_config, **deployment_kwargs

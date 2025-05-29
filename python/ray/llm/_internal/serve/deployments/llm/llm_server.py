@@ -68,6 +68,7 @@ from ray.llm._internal.serve.observability.logging import get_logger
 from ray.llm._internal.serve.observability.usage_telemetry.usage import (
     push_telemetry_report_for_all_models,
 )
+from ray.llm._internal.serve.deployments.llm.dp_manager import DPManager
 
 logger = get_logger(__name__)
 
@@ -419,6 +420,7 @@ class LLMServer(_LLMServerBase):
         engine_cls: Optional[Type[LLMEngine]] = None,
         image_retriever_cls: Optional[Type[ImageRetriever]] = None,
         model_downloader: Optional[LoraModelLoader] = None,
+        dp_manager: Optional[DPManager] = None,
     ):
         """Constructor of LLMServer.
 
@@ -435,8 +437,13 @@ class LLMServer(_LLMServerBase):
                 Defaults to `ImageRetriever`.
             model_downloader: Dependency injection for the model downloader object.
                 Defaults to be initialized with `LoraModelLoader`.
+            dp_manager: Dependency injection for the dp manager class.
+                Defaults to None.
         """
         await super().__init__(llm_config)
+        logger.info(f"dp_manager: {dp_manager}")
+
+        assert dp_manager is not None, "dp_manager is required"
 
         self._engine_cls = engine_cls or self._default_engine_cls
         self.engine = self._get_engine_class(self._llm_config)
