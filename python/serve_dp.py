@@ -14,9 +14,11 @@ llm_config = LLMConfig(
     ),
     # Pass the desired accelerator type (e.g. A10G, L4, etc.)
     accelerator_type="L4",
+    runtime_env={"env_vars": {"VLLM_USE_V1": "1"}},
     # You can customize the engine arguments (e.g. vLLM engine kwargs)
     engine_kwargs=dict(
         data_parallel_size=2,
+        data_parallel_backend="ray",
     ),
 )
 
