@@ -9,7 +9,7 @@ llm_config = LLMConfig(
     deployment_config=dict(
         autoscaling_config=dict(
             min_replicas=1,
-            max_replicas=2,
+            max_replicas=1,
         )
     ),
     # Pass the desired accelerator type (e.g. A10G, L4, etc.)
