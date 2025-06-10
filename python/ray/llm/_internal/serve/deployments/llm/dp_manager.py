@@ -8,6 +8,7 @@ from ray.llm._internal.serve.configs.constants import (
     DEFAULT_HEALTH_CHECK_PERIOD_S,
     DEFAULT_HEALTH_CHECK_TIMEOUT_S,
 )
+import ray
 from vllm.v1.utils import CoreEngineActorManager
 from vllm.v1.executor.abstract import Executor
 
@@ -15,7 +16,24 @@ from vllm.v1.executor.abstract import Executor
 class DPManager:
     def __init__(self, llm_config: LLMConfig):
         self.llm_config = llm_config
-        engine_args, engine_config = _get_vllm_engine_config(self.llm_config)
+        # Create engine config on a task with access to GPU,
+        # as GPU capability may be queried.
+        ref = (
+            ray.remote(
+                num_cpus=0,
+                num_gpus=1,
+                accelerator_type=self.llm_config.accelerator_type,
+            )(_get_vllm_engine_config)
+            # .options(
+            #     runtime_env=node_initialization.runtime_env,
+            #     scheduling_strategy=PlacementGroupSchedulingStrategy(
+            #         placement_group=node_initialization.placement_group,
+            #     ),
+            # )
+            .remote(self.llm_config)
+        )
+        engine_args, engine_config = ray.get(ref)
+
         # NEXT: determine addresses
         addresses = None
         self.actor_manager = CoreEngineActorManager(
