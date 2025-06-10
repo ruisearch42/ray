@@ -9,12 +9,20 @@ from ray.llm._internal.serve.configs.constants import (
     DEFAULT_HEALTH_CHECK_TIMEOUT_S,
 )
 import ray
-from vllm.v1.utils import CoreEngineActorManager
+from vllm.v1.utils import (
+    CoreEngineActorManager,
+    EngineZmqAddresses,
+    get_engine_client_zmq_addr,
+)
 from vllm.v1.executor.abstract import Executor
+from ray.llm._internal.serve.observability.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class DPManager:
     def __init__(self, llm_config: LLMConfig):
+        logger.info("DPManager initialization started")
         self.llm_config = llm_config
         # Create engine config on a task with access to GPU,
         # as GPU capability may be queried.
@@ -34,14 +42,29 @@ class DPManager:
         )
         engine_args, engine_config = ray.get(ref)
 
-        # NEXT: determine addresses
-        addresses = None
+        num_engine_cores = llm_config.engine_kwargs.get("data_parallel_size", 1)
+        dp_master_ip = engine_config.parallel_config.data_parallel_master_ip
+        # Set up input and output addresses.
+        input_addresses = [
+            get_engine_client_zmq_addr(False, dp_master_ip)
+            for _ in range(num_engine_cores)
+        ]
+        output_addresses = [
+            get_engine_client_zmq_addr(False, dp_master_ip)
+            for _ in range(num_engine_cores)
+        ]
+
+        addresses = EngineZmqAddresses(
+            inputs=input_addresses,
+            outputs=output_addresses,
+        )
         self.actor_manager = CoreEngineActorManager(
             vllm_config=engine_config,
             addresses=addresses,
             executor_class=Executor.get_class(engine_config),
             log_stats=not engine_args.disable_log_stats,
         )
+        logger.info("DPManager initialization complete")
 
     @classmethod
     def as_deployment(
