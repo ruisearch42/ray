@@ -8,7 +8,7 @@ from ray.llm._internal.serve.configs.constants import (
     DEFAULT_HEALTH_CHECK_PERIOD_S,
     DEFAULT_HEALTH_CHECK_TIMEOUT_S,
 )
-from vllm.v1.utils import EngineCoreActorManager
+from vllm.v1.utils import CoreEngineActorManager
 from vllm.v1.executor.abstract import Executor
 
 
@@ -18,7 +18,7 @@ class DPManager:
         engine_args, engine_config = _get_vllm_engine_config(self.llm_config)
         # NEXT: determine addresses
         addresses = None
-        self.actor_manager = EngineCoreActorManager(
+        self.actor_manager = CoreEngineActorManager(
             vllm_config=engine_config,
             addresses=addresses,
             executor_class=Executor.get_class(engine_config),
