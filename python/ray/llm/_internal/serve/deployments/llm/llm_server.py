@@ -446,7 +446,12 @@ class LLMServer(_LLMServerBase):
         assert dp_manager is not None, "dp_manager is required"
 
         self._engine_cls = engine_cls or self._default_engine_cls
-        self.engine = self._get_engine_class(self._llm_config)
+        # TODO: set client_index properly based on the replica index
+        self.engine = self._get_engine_class(
+            self._llm_config,
+            client_addresses=dp_manager.get_client_addresses(),
+            client_index=0,
+        )
         await asyncio.wait_for(self._start_engine(), timeout=ENGINE_START_TIMEOUT_S)
 
         self.image_retriever = (

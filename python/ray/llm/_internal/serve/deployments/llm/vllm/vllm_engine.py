@@ -60,6 +60,7 @@ from ray.llm._internal.serve.configs.constants import (
 from ray.llm._internal.utils import try_import
 
 from ray.llm._internal.serve.deployments.llm.llm_engine import LLMEngine
+from vllm.v1.utils import EngineZmqAddresses
 
 if TYPE_CHECKING:
     from vllm import SamplingParams as VLLMInternalSamplingParams
@@ -180,6 +181,8 @@ class VLLMEngine(LLMEngine):
     def __init__(
         self,
         llm_config: LLMConfig,
+        client_addresses: Optional[EngineZmqAddresses] = None,
+        client_index: int = 0,
     ):
         """Create a vLLM Engine class
 
@@ -229,6 +232,8 @@ class VLLMEngine(LLMEngine):
             llm_config, LLMConfig
         ), f"Got invalid config {llm_config} of type {type(llm_config)}"
         self.llm_config = llm_config
+        self.client_addresses = client_addresses
+        self.client_index = client_index
         self.engine_config = VLLMEngineConfig.from_llm_config(llm_config)
 
         self._stats = VLLMEngineStatTracker()
@@ -530,6 +535,8 @@ class VLLMEngine(LLMEngine):
             executor_class=executor_class,
             log_stats=not engine_args.disable_log_stats,
             stat_loggers=custom_stat_loggers,
+            client_addresses=self.client_addresses,
+            client_index=self.client_index,
         )
 
         return engine

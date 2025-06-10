@@ -58,6 +58,7 @@ class DPManager:
             inputs=input_addresses,
             outputs=output_addresses,
         )
+        self.client_addresses = addresses
         self.actor_manager = CoreEngineActorManager(
             vllm_config=engine_config,
             addresses=addresses,
@@ -65,6 +66,9 @@ class DPManager:
             log_stats=not engine_args.disable_log_stats,
         )
         logger.info("DPManager initialization complete")
+
+    def get_client_addresses(self):
+        return self.client_addresses
 
     @classmethod
     def as_deployment(
