@@ -34,11 +34,11 @@ def build_llm_deployment(
     engine_kwargs = llm_config.engine_kwargs
     dp_size = engine_kwargs.get("data_parallel_size", 1)
     if dp_size > 1:
-        dp_manager = DPManagerDeployment.bind(llm_config)
+        dp_manager_deployment = DPManagerDeployment.bind(llm_config)
     else:
-        dp_manager = None
+        dp_manager_deployment = None
 
-    deployment_kwargs.update({"dp_manager": dp_manager})
+    deployment_kwargs.update({"dp_manager_deployment": dp_manager_deployment})
 
     return LLMDeployment.options(**deployment_options).bind(
         llm_config=llm_config, **deployment_kwargs

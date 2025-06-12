@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from typing import AsyncGenerator, Dict, Any, Optional, Type, Union
 
 # Third-party imports
+import ray
 from ray import serve
 from ray._common.utils import import_attr
 
@@ -68,7 +69,7 @@ from ray.llm._internal.serve.observability.logging import get_logger
 from ray.llm._internal.serve.observability.usage_telemetry.usage import (
     push_telemetry_report_for_all_models,
 )
-from ray.llm._internal.serve.deployments.llm.dp_manager import DPManager
+from ray.llm._internal.serve.deployments.llm.dp_manager import DPManager, DPManagerDeployment
 
 logger = get_logger(__name__)
 
@@ -420,7 +421,7 @@ class LLMServer(_LLMServerBase):
         engine_cls: Optional[Type[LLMEngine]] = None,
         image_retriever_cls: Optional[Type[ImageRetriever]] = None,
         model_downloader: Optional[LoraModelLoader] = None,
-        dp_manager: Optional[DPManager] = None,
+        dp_manager_deployment: Optional[DPManagerDeployment] = None,
     ):
         """Constructor of LLMServer.
 
@@ -441,15 +442,16 @@ class LLMServer(_LLMServerBase):
                 Defaults to None.
         """
         await super().__init__(llm_config)
-        logger.info(f"dp_manager: {dp_manager}")
+        logger.info(f"dp_manager_deployment: {dp_manager_deployment}")
 
-        assert dp_manager is not None, "dp_manager is required"
+        assert dp_manager_deployment is not None, "dp_manager is required"
 
         self._engine_cls = engine_cls or self._default_engine_cls
+        client_addresses = ray.get(dp_manager_deployment.get_client_addresses.remote())
         # TODO: set client_index properly based on the replica index
         self.engine = self._get_engine_class(
             self._llm_config,
-            client_addresses=dp_manager.get_client_addresses(),
+            client_addresses=client_addresses,
             client_index=0,
         )
         await asyncio.wait_for(self._start_engine(), timeout=ENGINE_START_TIMEOUT_S)
