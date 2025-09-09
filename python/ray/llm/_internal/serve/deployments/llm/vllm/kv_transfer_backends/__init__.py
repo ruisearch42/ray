@@ -9,8 +9,12 @@ from ray.llm._internal.serve.deployments.llm.vllm.kv_transfer_backends.lmcache_c
 from ray.llm._internal.serve.deployments.llm.vllm.kv_transfer_backends.nixl_connector import (
     NixlConnectorBackend,
 )
+from ray.llm._internal.serve.deployments.llm.vllm.kv_transfer_backends.p2p_nccl_connector import (
+    P2pNcclConnectorBackend,
+)
 
 SUPPORTED_BACKENDS: Dict[str, BaseConnectorBackend] = {
     "LMCacheConnectorV1": LMCacheConnectorV1Backend,
     "NixlConnector": NixlConnectorBackend,
+    "P2pNcclConnector": P2pNcclConnectorBackend,
 }
