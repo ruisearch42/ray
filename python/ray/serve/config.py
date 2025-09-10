@@ -154,6 +154,7 @@ class RequestRouterConfig(BaseModel):
         self._serialized_request_router_cls = cloudpickle.dumps(request_router_class)
         # Update the request_router_class field to be the string path
         self.request_router_class = request_router_path
+        logger.info(f"RequestRouterConfig _serialize_request_router_cls with request router class {self.request_router_class}")
 
     def get_request_router_class(self) -> Callable:
         """Deserialize the request router from cloudpickled bytes."""

@@ -464,6 +464,7 @@ class AsyncioRouter:
         self._handle_source = handle_source
         self._event_loop = event_loop
         self._request_router_class = request_router_class
+        logger.info(f"AsyncioRouter __init__ with request router class {self._request_router_class} for deployment {self.deployment_id}")
         self._request_router_kwargs = (
             request_router_kwargs if request_router_kwargs else {}
         )
@@ -477,6 +478,7 @@ class AsyncioRouter:
 
         # The request router will be lazy loaded to decouple form the initialization.
         self._request_router: Optional[RequestRouter] = request_router
+        logger.info(f"self._request_router: {self._request_router}")
 
         if _request_router_initialized_event:
             self._request_router_initialized = _request_router_initialized_event
@@ -565,6 +567,7 @@ class AsyncioRouter:
         router is initialized.
         """
         if not self._request_router and self._request_router_class:
+            logger.info(f"Initializing request router {self._request_router_class} for deployment {self.deployment_id}")
             request_router = self._request_router_class(
                 deployment_id=self.deployment_id,
                 handle_source=self._handle_source,
@@ -593,6 +596,7 @@ class AsyncioRouter:
             # feature is being used in this cluster.
             if self._request_router_class is not PowerOfTwoChoicesRequestRouter:
                 ServeUsageTag.CUSTOM_REQUEST_ROUTER_USED.record("1")
+        logger.info(f"property of AsyncioRouter.request_router: {self._request_router}")
         return self._request_router
 
     def running_replicas_populated(self) -> bool:
@@ -615,6 +619,7 @@ class AsyncioRouter:
             self._running_replicas_populated = True
 
     def update_deployment_config(self, deployment_config: DeploymentConfig):
+        logger.info(f"update_deployment_config {self.deployment_id} with request router config {deployment_config.request_router_config}", stack_info=True)
         self._request_router_class = (
             deployment_config.request_router_config.get_request_router_class()
         )

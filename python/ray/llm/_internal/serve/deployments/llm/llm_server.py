@@ -285,6 +285,7 @@ class LLMServer(_LLMServerBase):
     ):
         """Add the request id to the request."""
         request_id = get_serve_request_id()
+        logger.info(f"_maybe_add_request_id_to_request: {request_id}")
         if request_id:
             request.request_id = request_id
 

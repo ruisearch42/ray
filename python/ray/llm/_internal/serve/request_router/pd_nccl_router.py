@@ -1,16 +1,16 @@
 import re
 from typing import List, Optional
-from ray.python.ray.serve._private.request_router.common import PendingRequest
-from ray.python.ray.serve._private.request_router.replica_wrapper import RunningReplica
+from ray.serve._private.request_router.common import PendingRequest
+from ray.serve._private.request_router.replica_wrapper import RunningReplica
 from ray.serve._private.request_router.request_router import FIFOMixin, LocalityMixin, MultiplexMixin, RequestRouter
 
 import ray
 import random
 import logging
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
-class PDNCCLRequestRouter(FIFOMixin, LocalityMixin, MultiplexMixin, RequestRouter):
+class PDNCCLRequestRouter(FIFOMixin, RequestRouter):
 
     async def choose_replicas(
         self, 
@@ -19,7 +19,16 @@ class PDNCCLRequestRouter(FIFOMixin, LocalityMixin, MultiplexMixin, RequestRoute
     ) -> List[List[RunningReplica]]:
 
         request_id = pending_request.metadata.request_id
-        print(f"PDNCCLRequestRouter routing request {request_id}")
+        logger.info(f"PDNCCLRequestRouter routing request_id: {request_id} request: {pending_request}")
+        if pending_request.metadata.call_method == "llm_config":
+            replica = random.choice(candidate_replicas)
+            logger.info(f"PDNCCLRequestRouter randomly routes llm_config request {pending_request} to replica {replica}")
+            return [[replica]]
+        elif pending_request.metadata.call_method == "pd_info":
+            # TODO: pass in the router config from user and actually use it here
+            replica = random.choice(candidate_replicas)
+            logger.info(f"PDNCCLRequestRouter randomly routes pd_info request {pending_request} to replica {replica}")
+            return [[replica]]
 
         decode_ip, decode_port = self.parse_request_id(request_id, is_prefill=False)
         prefill_ip, prefill_port = self.parse_request_id(request_id, is_prefill=True)
@@ -29,9 +38,9 @@ class PDNCCLRequestRouter(FIFOMixin, LocalityMixin, MultiplexMixin, RequestRoute
 
         for replica in candidate_replicas:
             if replica.replica_id.unique_id == decode_replica_id:
-                return [replica]
+                return [[replica]]
             if replica.replica_id.unique_id == prefill_replica_id:
-                return [replica]
+                return [[replica]]
 
     @staticmethod
     def parse_request_id(request_id: str, is_prefill=True) -> tuple[str, int]:

@@ -89,6 +89,7 @@ class PDProxyServer(LLMServer):
         # We can obtain llm_config from prefill_server for obtaining model_id
         # assuming there is no mismatch between prefill and decode server.
         llm_config = await prefill_server.llm_config.remote()
+        logger.info("PDProxyServer __init__ with llm_config: %s", llm_config)
         await super().__init__(llm_config)
         self.prefill_server = prefill_server.options(stream=True)
         self.decode_server = decode_server.options(stream=True)

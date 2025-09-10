@@ -110,10 +110,13 @@ def get_request_metadata(init_options, handle_options):
         elif _request_context.grpc_context:
             request_protocol = RequestProtocol.GRPC
 
+    request_id = _request_context.request_id
+    if not request_id:
+        request_id = generate_request_id()
+    print(f"get_request_metadata, {_request_context.request_id=}, {request_id=}")
+
     return RequestMetadata(
-        request_id=_request_context.request_id
-        if _request_context.request_id
-        else generate_request_id(),
+        request_id=request_id,
         internal_request_id=_request_context._internal_request_id
         if _request_context._internal_request_id
         else generate_request_id(),
