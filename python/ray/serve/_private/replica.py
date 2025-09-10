@@ -1018,6 +1018,9 @@ class ReplicaActor:
         not be blocked by user code.
         """
         return self._replica_impl.get_num_ongoing_requests()
+    
+    def get_replica_id(self) -> str:
+        return self._replica_impl._replica_id.unique_id
 
     async def is_allocated(self) -> str:
         """poke the replica to check whether it's alive.
