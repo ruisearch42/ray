@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from typing import Callable, Optional, Tuple
 
 import ray
@@ -53,6 +54,7 @@ def create_cluster_node_info_cache(gcs_client: GcsClient) -> ClusterNodeInfoCach
 
 CreatePlacementGroupFn = Callable[[CreatePlacementGroupRequest], PlacementGroup]
 
+logger = logging.getLogger(__name__)
 
 def _default_create_placement_group(
     request: CreatePlacementGroupRequest,
@@ -176,6 +178,7 @@ def create_router(
             )
 
         router_wrapper_cls = CurrentLoopRouter
+    logger.info(f"router_wrapper_cls: {router_wrapper_cls}", stack_info=True)
 
     return router_wrapper_cls(
         controller_handle=controller_handle,

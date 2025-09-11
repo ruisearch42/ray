@@ -329,6 +329,7 @@ class LLMServer(_LLMServerBase):
             An AsyncGenerator of the response. If stream is True and batching is enabled, then the generator will yield a list of streaming responses (strings of the format data: {response_json}\n\n). Otherwise, it will yield the non-streaming response from engine directly.
         """
 
+        logger.info(f"_run_request, request: {request}")
         await self._maybe_add_request_id_to_request(request)
         await self._maybe_resolve_lora_from_multiplex()
 

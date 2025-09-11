@@ -596,7 +596,7 @@ class AsyncioRouter:
             # feature is being used in this cluster.
             if self._request_router_class is not PowerOfTwoChoicesRequestRouter:
                 ServeUsageTag.CUSTOM_REQUEST_ROUTER_USED.record("1")
-        logger.info(f"property of AsyncioRouter.request_router: {self._request_router}")
+        logger.info(f"property of AsyncioRouter.request_router for deployment {self.deployment_id}: {self._request_router}")
         return self._request_router
 
     def running_replicas_populated(self) -> bool:
