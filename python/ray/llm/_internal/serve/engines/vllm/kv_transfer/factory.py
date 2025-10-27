@@ -114,6 +114,12 @@ KVConnectorBackendFactory.register_backend(
 )
 
 KVConnectorBackendFactory.register_backend(
+    "P2pNcclConnector",
+    "ray.llm._internal.serve.engines.vllm.kv_transfer.nccl",
+    "P2pNcclConnectorBackend",
+)
+
+KVConnectorBackendFactory.register_backend(
     "MultiConnector",
     "ray.llm._internal.serve.engines.vllm.kv_transfer.multi_connector",
     "MultiConnectorBackend",
