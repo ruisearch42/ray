@@ -476,7 +476,16 @@ class LLMServer(LLMServerProtocol):
         replica_id = serve.get_replica_context().replica_id.unique_id
         from vllm import utils as vllm_utils
         ip = vllm_utils.get_ip()
-        port = self.engine.llm_config.engine_kwargs["kv_transfer_config"]["kv_port"]
+        port = None
+        if self.engine.llm_config.engine_kwargs["kv_transfer_config"]["kv_connector"] == "P2pNcclConnector":
+            port = self.engine.llm_config.engine_kwargs["kv_transfer_config"]["kv_port"]
+        elif self.engine.llm_config.engine_kwargs["kv_transfer_config"]["kv_connector"] == "MultiConnector":
+            for connector in self.engine.llm_config.engine_kwargs["kv_transfer_config"]["kv_connector_extra_config"]["connectors"]:
+                if connector["kv_connector"] == "P2pNcclConnector":
+                    port = connector["kv_port"]
+                    break
+        if port is None:
+            raise ValueError("P2pNcclConnector or MultiConnector not found in the engine kwargs")
         return replica_id, f"{ip}:{port}"
 
     @classmethod
