@@ -17,6 +17,7 @@ from ray.llm._internal.serve.core.ingress.ingress import (
 from ray.llm._internal.serve.serving_patterns.prefill_decode.pd_server import (
     PDProxyServer,
 )
+from ray.llm._internal.serve.core.server.llm_server import SessionAwareLLMServer
 from ray.serve.deployment import Application
 from ray.serve.llm import (
     LLMConfig,
@@ -120,10 +121,10 @@ def build_pd_openai_app(pd_serving_args: dict) -> Application:
     pd_config = PDServingArgs.model_validate(pd_serving_args)
 
     prefill_deployment = build_llm_deployment(
-        pd_config.prefill_config, name_prefix="Prefill:"
+        pd_config.prefill_config, name_prefix="Prefill:", deployment_cls=SessionAwareLLMServer
     )
     decode_deployment = build_llm_deployment(
-        pd_config.decode_config, name_prefix="Decode:"
+        pd_config.decode_config, name_prefix="Decode:", deployment_cls=SessionAwareLLMServer
     )
 
     # Get the default deployment options from the PDProxyServer class based on the prefill and decode configs.

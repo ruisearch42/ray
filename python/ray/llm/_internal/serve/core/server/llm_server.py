@@ -60,6 +60,12 @@ logger = get_logger(__name__)
 T = TypeVar("T")
 
 
+from ray.serve.context import _get_internal_replica_context
+from ray.serve._private.common import ReplicaID
+
+from typing import Dict, Any
+
+
 def _merge_replica_actor_and_child_actor_bundles(
     child_actor_bundles: List[Dict[str, float]],
     replica_actor_bundle: Dict[str, float],
@@ -465,6 +471,13 @@ class LLMServer(LLMServerProtocol):
 
     async def llm_config(self) -> Optional[LLMConfig]:
         return self._llm_config
+    
+    async def pd_info(self):
+        replica_id = serve.get_replica_context().replica_id.unique_id
+        from vllm import utils as vllm_utils
+        ip = vllm_utils.get_ip()
+        port = self.engine.llm_config.engine_kwargs["kv_transfer_config"]["kv_port"]
+        return replica_id, f"{ip}:{port}"
 
     @classmethod
     def get_deployment_options(cls, llm_config: "LLMConfig"):
@@ -521,3 +534,65 @@ class LLMServer(LLMServerProtocol):
         deployment_options["ray_actor_options"] = ray_actor_options
 
         return deployment_options
+
+
+class SesssionAwareMixin:
+    
+    async def __init__(self):
+        
+        context = _get_internal_replica_context()
+        self.replica_id: ReplicaID = context.replica_id
+        
+        # TODO: Make this a Capped set of size 1000 or sth that has LRU eviction
+        self.hot_sessions = set()
+        
+    def _parse_session_id(self, request):
+        # Extra args from request
+        xargs = getattr(request, "vllm_xargs", {}) or {}
+        return xargs.get("session_id")
+    
+    def record_routing_stats(self) -> Dict[str, Any]:
+        return {
+            "hot_sessions": self.hot_sessions
+        }
+
+class SessionAwareLLMServer(LLMServer, SesssionAwareMixin):
+    
+    async def __init__(self, llm_config: LLMConfig):
+        await LLMServer.__init__(self, llm_config)
+        await SesssionAwareMixin.__init__(self)
+        
+    async def _run_request(
+        self,
+        request,
+        *,
+        engine_method: str,
+        batch_output_stream: bool = False,
+    ):
+        # from session aware mixin
+        session_id = self._parse_session_id(request)
+        if session_id:
+            self.hot_sessions.add(session_id)
+        
+        return await super()._run_request(
+            request,
+            engine_method=engine_method,
+            batch_output_stream=batch_output_stream,
+        )
+        
+    
+    async def completions(self, request):
+        # NOTE: Making the batch_output_stream=False to see if it affects the TPOT performance. 
+        return await self._run_request(
+            request,
+            engine_method="completions",
+            batch_output_stream=False,
+        )
+        
+    async def chat(self, request):
+        # NOTE: Making the batch_output_stream=False to see if it affects the TPOT performance. 
+        return await self._run_request(
+            request,
+            engine_method="chat",
+            batch_output_stream=False,
+        )
